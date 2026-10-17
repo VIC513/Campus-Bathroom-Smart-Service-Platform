@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist-ssr/
+
+# 编辑器 / 系统文件
+.vscode/
+.idea/
+.DS_Store
+*.local
+
+# 日志与临时文件
+*.log
+
+# 本机会话数据（登录演示账号存于浏览器 localStorage，不入库）
+*.zip
