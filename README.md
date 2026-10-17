@@ -64,6 +64,16 @@ frontend/
 ```
 
 ### 快速开始
+
+**方式一：一键启动（推荐，适合别的电脑）**
+```bash
+git clone https://github.com/VIC513/Campus-Bathroom-Smart-Service-Platform.git
+cd Campus-Bathroom-Smart-Service-Platform
+./start.sh        # macOS / Linux；Windows 双击 start.bat 或运行 start
+```
+脚本会自动 `npm install`（首次）并启动前端，浏览器打开 `http://localhost:5173`。可选自动启动后端（Redis + FastAPI）的说明见脚本注释。
+
+**方式二：手动启动**
 ```bash
 cd frontend
 npm install
