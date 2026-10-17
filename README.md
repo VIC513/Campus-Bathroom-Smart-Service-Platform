@@ -1,3 +1,5 @@
+# Campus-Bathroom-Smart-Service-Platform
+
 # 浴室智洗 BathSight · 高校浴室智能排队系统
 
 利用低成本、无侵入的物联网硬件（门磁/水流传感器）+ 数据持久化 + 预测算法，
