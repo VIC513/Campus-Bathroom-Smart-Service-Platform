@@ -56,11 +56,12 @@ const turnover = computed(() =>
 )
 
 /**
- * 本楼用水曲线：全局峰形 × (0.5 + 使用率) × 规模系数(楼隔间数/15)。
- * 每栋楼振幅不同，且随实时使用率变化（1 号楼联动后端数据）。
+ * 本楼用水曲线：把全校规模的基准曲线压缩到单栋量级。
+ * factor = 楼隔间数相对 15 的规模 × 使用率加权 × 0.5 压缩，
+ * 使 15 隔间浴室晚高峰约 200-300 人次，随实时使用率小幅变化。
  */
 const scaledWater = computed(() => {
-  const factor = (0.5 + usageRate.value / 100) * Math.max(0.4, stalls.value.length / 15)
+  const factor = (stalls.value.length / 15) * (0.35 + usageRate.value / 100) * 0.5
   return baseWater.value.map((u) => Math.max(5, Math.round(u * factor)))
 })
 
@@ -232,7 +233,7 @@ async function onReported(stallId: number, type: FaultType, detail: string) {
           <span>每日用水高峰曲线</span>
           <span class="dash-badge">{{ peakText }}</span>
         </div>
-        <WaterPeakChart :usage="scaledWater" />
+        <WaterPeakChart :usage="scaledWater" :height="120" />
         <div class="dash-note">曲线振幅随本楼实时使用率变化（1 号楼为后端实时数据）</div>
       </div>
 

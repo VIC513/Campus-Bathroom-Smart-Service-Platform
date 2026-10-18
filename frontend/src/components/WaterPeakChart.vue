@@ -45,8 +45,8 @@ const chart = computed(() => {
   return { line, area, max, px, py, peakIdx, H }
 })
 
-/** X 轴刻度：每 3 小时标注一次 */
-const xTicks = [0, 3, 6, 9, 12, 15, 18, 21, 23]
+/** X 轴刻度：每 3 小时标注一次（21:00 为止，避免 23:00 与前一刻度标签重叠） */
+const xTicks = [0, 3, 6, 9, 12, 15, 18, 21]
 </script>
 
 <template>
@@ -92,8 +92,10 @@ const xTicks = [0, 3, 6, 9, 12, 15, 18, 21, 23]
 <style scoped>
 .chart {
   width: 100%;
+  max-width: 420px; /* 限制图表宽度，避免在卡片内被拉伸过大 */
   height: auto;
   display: block;
+  margin: 0 auto; /* 居中，与卡片内容对齐 */
 }
 .axis {
   font-size: 10px;

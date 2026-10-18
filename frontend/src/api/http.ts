@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { showToast } from 'vant'
 
 /**
  * Axios 实例：统一 baseURL 与错误提示。
@@ -10,13 +9,12 @@ const http = axios.create({
   timeout: 8000,
 })
 
-// 响应拦截：统一报错提示，方便联调
+// 响应拦截：仅透传错误，不再弹统一 toast。
+// 所有业务请求都走 safeFetch（真实优先、失败回退 mock），
+// 后端未启动时由 safeFetch 静默回退，避免每次请求都弹「网络开小差了」。
 http.interceptors.response.use(
   (res) => res.data,
-  (err) => {
-    showToast(err.response?.data?.detail || '网络开小差了，请稍后再试')
-    return Promise.reject(err)
-  }
+  (err) => Promise.reject(err)
 )
 
 export default http
