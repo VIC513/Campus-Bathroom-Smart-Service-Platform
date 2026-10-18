@@ -6,7 +6,8 @@ import { useBathhouseStore } from '@/stores/bathhouse'
 import { countStalls } from '@/mock/data'
 import { getWaterUsage } from '@/api'
 import WaterPeakChart from '@/components/WaterPeakChart.vue'
-import type { Bathhouse, Bathzone, Stall, WaterPoint } from '@/types'
+import FaultReportPopup from '@/components/FaultReportPopup.vue'
+import type { Bathhouse, Bathzone, FaultType, Stall, WaterPoint } from '@/types'
 
 const store = useBathhouseStore()
 const router = useRouter()
@@ -87,6 +88,15 @@ function simTick() {
   } else if (fault.length) {
     fault[Math.floor(Math.random() * fault.length)].status = 'idle'
   }
+}
+
+/* ===== 报修（首页入口，弹窗与详情页共用组件） ===== */
+
+const showReport = ref(false)
+
+/** 报修提交：走后端 /feedback/fault（离线自动回退 mock），并联动该隔间变「维修」 */
+function onReported(stallId: number, type: FaultType, detail: string) {
+  store.submitFault(current()!.id, stallId, type, detail)
 }
 
 /* ================= 数据大盘（首页内嵌，与 /dashboard 逻辑一致） ================= */
@@ -179,11 +189,17 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 排队入口：常驻显示；有空闲隔间时禁用（灰色），全满时可点 -->
-      <button class="queue-btn" :class="{ disabled: !isFull() }" @click="joinQueue">
-        <van-icon name="volume-o" />
-        {{ isFull() ? '当前无空闲隔间，排队等叫号' : '有空闲隔间，点格子直接选位' }}
-      </button>
+      <!-- 操作行：排队（常驻，全满可点）+ 报修 -->
+      <div class="btn-row">
+        <button class="queue-btn" :class="{ disabled: !isFull() }" @click="joinQueue">
+          <van-icon name="volume-o" />
+          {{ isFull() ? '排队等叫号' : '点格子选位' }}
+        </button>
+        <button class="repair-btn" @click="showReport = true">
+          <van-icon name="warning-o" />
+          设备报修
+        </button>
+      </div>
 
       <!-- ========== 数据大盘（首页内嵌） ========== -->
       <div class="sec-title dash-title">
@@ -226,6 +242,14 @@ onMounted(() => {
         </div>
         <div class="legend">后端在线时使用率为真实实时数据，离线时为本地模拟</div>
       </div>
+
+      <!-- 报修弹窗（与详情页共用组件：选隔间 + 故障类型 + 自定义描述） -->
+      <FaultReportPopup
+        v-model:show="showReport"
+        :bath-name="current()!.name"
+        :zones="current()!.zones"
+        @reported="onReported"
+      />
     </template>
   </div>
 </template>
@@ -349,10 +373,14 @@ onMounted(() => {
 .st-busy { color: var(--busy); border-color: rgba(255, 152, 0, 0.35); }
 .st-fault { color: var(--full); border-color: rgba(232, 70, 58, 0.35); }
 
-/* 全满排队按钮 */
-.queue-btn {
-  width: 100%;
+/* 操作行：排队 + 报修 双按钮 */
+.btn-row {
+  display: flex;
+  gap: 10px;
   margin-top: 18px;
+}
+.queue-btn {
+  flex: 1;
   padding: 13px 0;
   border: none;
   border-radius: var(--radius);
@@ -370,6 +398,21 @@ onMounted(() => {
   opacity: 0.55;
   background: linear-gradient(135deg, #55606e, #3c4654);
   cursor: not-allowed;
+}
+.repair-btn {
+  flex: 1;
+  padding: 13px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--busy);
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
 }
 
 /* ========== 首页内嵌数据大盘 ========== */
