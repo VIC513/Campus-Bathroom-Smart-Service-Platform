@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getBathhouses, getWaterUsage } from '@/api'
+import { getWaterUsage } from '@/api'
+import { useBathhouseStore } from '@/stores/bathhouse'
 import WaterPeakChart from '@/components/WaterPeakChart.vue'
-import type { Bathhouse, WaterPoint } from '@/types'
+import type { Bathhouse, Bathzone, WaterPoint } from '@/types'
 
 const router = useRouter()
+const store = useBathhouseStore()
 
 /**
- * 数据大盘看板：
+ * 数据大盘看板（单楼模式）：
  * - 每日用水高峰曲线（本地模拟 24 小时数据，微信/小程序端无后端对应接口）
- * - 各区域浴室使用率及翻台率（1 号楼为真实后端实时使用率，其余 30 栋为模拟数据）
+ * - 本浴室各分区使用率及翻台率（后端在线时为真实数据，离线时为模拟数据）
  */
 const water = ref<WaterPoint[]>([])
-const buildings = ref<Bathhouse[]>([])
 const loading = ref(true)
 
 /** 真实接入的楼栋 id（与 api/index.ts 的 BATHHOUSE_ID 保持一致） */
@@ -21,9 +22,9 @@ const REAL_ID = 1
 
 onMounted(async () => {
   try {
-    const [w, list] = await Promise.all([getWaterUsage(), getBathhouses()])
+    const w = await getWaterUsage()
     water.value = w
-    buildings.value = list
+    if (!store.bathhouses.length) await store.fetchBathhouses()
   } finally {
     loading.value = false
   }
@@ -39,15 +40,34 @@ const peakText = computed(() => {
   return `峰值 ${p.usage} 人次 · ${String(p.hour).padStart(2, '0')}:00`
 })
 
-/** 按使用率降序排列，用于「各区域浴室使用率」榜单 */
-const sortedBuildings = computed(() =>
-  [...buildings.value].sort((a, b) => b.usageRate - a.usageRate)
-)
+/** 当前浴室（单楼，可能为空） */
+const current = computed<Bathhouse | null>(() => store.bathhouses[0] ?? null)
 
-/** 翻台率：1 号楼用「使用率 × 基准 8 次/小时」估算，其余楼栋取模拟值 */
-function turnoverOf(b: Bathhouse): number {
-  return b.id === REAL_ID ? +((b.usageRate / 100) * 8).toFixed(1) : b.turnover
+/* ================= 分区使用率及翻台率 ================= */
+
+interface ZoneRow {
+  name: string
+  rate: number
+  turnover: number
+  real: boolean
 }
+
+/** 各分区使用率 = 该分区占用格数 / 总数；翻台率 = 使用率 × 基准 8 次/小时 */
+const zoneRows = computed<ZoneRow[]>(() => {
+  const b = current.value
+  if (!b) return []
+  return b.zones.map((z: Bathzone) => {
+    const total = z.stalls.length
+    const occupied = z.stalls.filter((s) => s.status === 'occupied' || s.status === 'cleaning').length
+    const rate = total ? Math.round((occupied / total) * 100) : 0
+    return {
+      name: z.name,
+      rate,
+      turnover: +((rate / 100) * 8).toFixed(1),
+      real: b.id === REAL_ID,
+    }
+  })
+})
 
 /** 使用率颜色：<50 绿（从容）、<80 橙（偏忙）、否则红（饱和） */
 function rateColor(v: number): string {
@@ -79,34 +99,34 @@ function rateColor(v: number): string {
         <div class="legend">深夜低谷（23-5 点） · 晨间小峰（7-9 点） · 晚间主峰（18-22 点）</div>
       </div>
 
-      <!-- 二、各区域浴室使用率及翻台率 -->
+      <!-- 二、本浴室各分区使用率及翻台率 -->
       <div class="card">
         <div class="card-title">
-          <span>各区域浴室使用率及翻台率</span>
-          <span class="badge">按使用率降序</span>
+          <span>各分区使用率及翻台率</span>
+          <span class="badge">共 {{ zoneRows.length }} 个分区</span>
         </div>
         <div class="rows">
-          <div v-for="b in sortedBuildings" :key="b.id" class="row">
+          <div v-for="z in zoneRows" :key="z.name" class="row">
             <div class="row-top">
               <span class="b-name">
-                {{ b.name }}
-                <i v-if="b.id === REAL_ID" class="real">实时</i>
+                {{ current?.name }} · {{ z.name }}
+                <i v-if="z.real" class="real">实时</i>
                 <i v-else class="mock">模拟</i>
               </span>
-              <span class="b-tv">翻台 {{ turnoverOf(b).toFixed(1) }} 次/时</span>
+              <span class="b-tv">翻台 {{ z.turnover.toFixed(1) }} 次/时</span>
             </div>
             <div class="row-bar">
               <van-progress
-                :percentage="b.usageRate"
+                :percentage="z.rate"
                 :show-pivot="false"
-                :color="rateColor(b.usageRate)"
+                :color="rateColor(z.rate)"
                 :stroke-width="8"
               />
-              <span class="b-rate" :style="{ color: rateColor(b.usageRate) }">{{ b.usageRate }}%</span>
+              <span class="b-rate" :style="{ color: rateColor(z.rate) }">{{ z.rate }}%</span>
             </div>
           </div>
         </div>
-        <div class="legend">1 号楼为真实后端实时数据（仿真器驱动），其余楼栋为本地模拟演示数据</div>
+        <div class="legend">后端在线时使用率为真实实时数据（仿真器驱动），后端离线时为本地模拟</div>
       </div>
     </template>
   </div>

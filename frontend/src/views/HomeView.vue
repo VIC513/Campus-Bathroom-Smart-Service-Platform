@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import { showConfirmDialog, showToast } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { countStalls } from '@/mock/data'
 import type { Bathhouse, Stall } from '@/types'
@@ -12,32 +13,57 @@ const router = useRouter()
 const hour = new Date().getHours()
 const greeting = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
 
-/** 拥挤度徽标：根据 crowd 值返回文字与样式类 */
-function crowdOf(b: Bathhouse) {
-  const c = b.crowd
-  return c < 40
-    ? { l: '空闲', cls: 'c-low' }
-    : c < 70
-      ? { l: '高峰', cls: 'c-mid' }
-      : { l: '拥挤', cls: 'c-high' }
+/** 当前浴室（单楼模式：后端同学的单楼版服务，15 隔间 F01-F15） */
+const current = (): Bathhouse | undefined => store.bathhouses[0]
+
+/** 全满时是否可排队（无空闲隔间即全满） */
+const isFull = () => (current() ? countStalls(current()!.stalls).idle === 0 : false)
+
+/** 状态文字与颜色：空闲/使用中/维修 三态（后端 cleaning 归入使用中） */
+function stateOf(s: Stall) {
+  if (s.status === 'idle') return { l: '空闲', cls: 'st-idle' }
+  if (s.status === 'fault') return { l: '维修', cls: 'st-fault' }
+  return { l: '使用中', cls: 'st-busy' }
 }
 
-/** 点击卡片进入该楼浴室详情 */
-function go(id: number) {
-  router.push(`/bathhouse/${id}`)
+/** 点击空闲隔间 → 确认后预约（走后端 /queue，后端离线自动回退 mock） */
+async function tapStall(s: Stall) {
+  if (s.status !== 'idle') {
+    showToast(stateOf(s).l + '中，不可预约')
+    return
+  }
+  try {
+    await showConfirmDialog({
+      title: '预约选位',
+      message: `确认预约 ${s.stallId} 吗？`,
+      confirmButtonText: '确认',
+      cancelButtonText: '再看看',
+    })
+  } catch {
+    return // 用户取消
+  }
+  await store.reserveStallAt(current()!.id, s.stallId)
+  showToast(`已分配 ${s.stallId}，请前往`)
+}
+
+/** 全满时排队等叫号（走后端 /queue，后端离线自动回退 mock） */
+async function joinQueue() {
+  const t = await store.takeTicketAt(current()!.id)
+  showToast(`取号成功，前面还有 ${t.ahead} 人`)
+  router.push('/queue')
 }
 
 /* ===== 持续仿真：模拟「线下有人进/出 + 设备故障」，数据一直自动变动 =====
- * 无需手动开关：页面加载即自动运行，覆盖全部 31 栋楼。
- * 1 号楼后端在线时以 WebSocket 推送为准（本地改动会被覆盖），后端离线时由本仿真兜底；
- * 其余 30 栋模拟楼栋完全由本仿真驱动，保证页面数据始终在流动。
+ * 无需手动开关：页面加载即自动运行。
+ * 后端在线时以 WebSocket 推送为准（本地改动会被覆盖），后端离线时由本仿真兜底，
+ * 保证看板数据始终在流动。预约/取号/报修过的隔间有 5 秒保护期，仿真不会抢走。
  */
 let simTimer: ReturnType<typeof setInterval> | null = null
 
-/** 每 2.5s 对随机一栋楼触发一个随机事件：进/出/突发故障/维修完成 */
+/** 每 2.5s 对随机一个空闲/占用隔间触发一个随机事件 */
 function simTick() {
-  if (!store.bathhouses.length) return
-  const b = store.bathhouses[Math.floor(Math.random() * store.bathhouses.length)]
+  const b = current()
+  if (!b) return
   // 排除用户最近预约/取号/报修过的隔间（仿真保护期 5 秒，见 store.simProtect）
   const free = (ss: Stall[]) => ss.filter((s) => !store.isStallProtected(b.id, s.stallId))
   const idle = free(b.stalls.filter((s) => s.status === 'idle'))
@@ -72,34 +98,53 @@ onMounted(() => {
     <!-- 顶部问候 + 副标题 -->
     <div class="topbar">
       <div class="hello">{{ greeting }}，同学</div>
-      <div class="sub">校园宿舍淋浴选位 · 共 {{ store.bathhouses.length }} 栋</div>
+      <div class="sub">校园宿舍淋浴选位 · 单栋实时看板</div>
     </div>
 
-    <!-- 楼栋卡片列表（v-if 区分加载态） -->
-    <div v-if="store.bathhouses.length" class="list">
-      <div
-        v-for="b in store.bathhouses"
-        :key="b.id"
-        class="card"
-        @click="go(b.id)"
-      >
+    <!-- 加载态 -->
+    <div v-if="!store.bathhouses.length" class="loading">正在加载浴室数据…</div>
+
+    <template v-else>
+      <!-- 单楼概览卡：三态统计 -->
+      <div class="card" @click="router.push(`/bathhouse/${current()!.id}`)">
         <div class="left">
-          <div class="name">{{ b.name }}</div>
-          <div class="loc">{{ b.area }}</div>
+          <div class="name">{{ current()!.name }}</div>
+          <div class="loc">{{ current()!.area }} · 共 {{ current()!.stalls.length }} 个隔间</div>
         </div>
         <div class="mid">
-          <div class="s s-free"><b>{{ countStalls(b.stalls).idle }}</b><span>空闲</span></div>
-          <div class="s s-busy"><b>{{ countStalls(b.stalls).occupied }}</b><span>使用中</span></div>
-          <div class="s s-full"><b>{{ countStalls(b.stalls).fault }}</b><span>维修</span></div>
+          <div class="s s-free"><b>{{ countStalls(current()!.stalls).idle }}</b><span>空闲</span></div>
+          <div class="s s-busy"><b>{{ countStalls(current()!.stalls).occupied }}</b><span>使用中</span></div>
+          <div class="s s-full"><b>{{ countStalls(current()!.stalls).fault }}</b><span>维修</span></div>
         </div>
         <div class="right">
-          <span class="crowd" :class="crowdOf(b).cls">{{ crowdOf(b).l }}</span>
           <van-icon name="arrow" color="var(--text-sub)" />
         </div>
       </div>
-    </div>
 
-    <div v-else class="loading">正在加载浴室列表…</div>
+      <!-- 隔间网格：点空闲格直接预约 -->
+      <div class="sec-title">
+        <span>隔间选位</span>
+        <span class="tip">点「空闲」直接预约</span>
+      </div>
+      <div class="grid">
+        <div
+          v-for="s in current()!.stalls"
+          :key="s.stallId"
+          class="stall"
+          :class="stateOf(s).cls"
+          @click="tapStall(s)"
+        >
+          <b>{{ s.stallId }}</b>
+          <span>{{ stateOf(s).l }}</span>
+        </div>
+      </div>
+
+      <!-- 全满时排队入口；有空位时不显示（直接点格子即可） -->
+      <button v-if="isFull()" class="queue-btn" @click="joinQueue">
+        <van-icon name="volume-o" />
+        当前无空闲隔间，排队等叫号
+      </button>
+    </template>
   </div>
 </template>
 
@@ -122,13 +167,13 @@ onMounted(() => {
   color: var(--text-sub);
   margin-top: 4px;
 }
-
-/* 卡片列表：参考微信小程序卡片样式 */
-.list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.loading {
+  text-align: center;
+  color: var(--text-sub);
+  padding: 80px 0;
 }
+
+/* 单楼概览卡 */
 .card {
   display: flex;
   align-items: center;
@@ -138,6 +183,7 @@ onMounted(() => {
   border-radius: var(--radius);
   padding: 14px;
   cursor: pointer;
+  margin-bottom: 18px;
 }
 .left {
   flex: 1 1 0;
@@ -153,8 +199,6 @@ onMounted(() => {
   color: var(--text-sub);
   margin-top: 3px;
 }
-
-/* 三态数量：文字 + 颜色区分 */
 .mid {
   display: flex;
   gap: 12px;
@@ -174,32 +218,70 @@ onMounted(() => {
 .s-free b { color: var(--free); }
 .s-busy b { color: var(--busy); }
 .s-full b { color: var(--full); }
-
 .right {
   display: flex;
   align-items: center;
-  gap: 4px;
 }
-.crowd {
+
+/* 隔间网格 */
+.sec-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.tip {
   font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-}
-.c-low {
-  color: var(--free);
-  background: rgba(15, 220, 120, 0.12);
-}
-.c-mid {
-  color: var(--busy);
-  background: rgba(255, 152, 0, 0.12);
-}
-.c-high {
-  color: var(--full);
-  background: rgba(232, 70, 58, 0.12);
-}
-.loading {
-  text-align: center;
+  font-weight: 400;
   color: var(--text-sub);
-  padding: 80px 0;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+.stall {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 0;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.stall:active {
+  transform: scale(0.95);
+}
+.stall b {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.stall span {
+  font-size: 11px;
+}
+.st-idle { color: var(--free); border-color: rgba(15, 220, 120, 0.35); }
+.st-busy { color: var(--busy); border-color: rgba(255, 152, 0, 0.35); }
+.st-fault { color: var(--full); border-color: rgba(232, 70, 58, 0.35); }
+
+/* 全满排队按钮 */
+.queue-btn {
+  width: 100%;
+  margin-top: 18px;
+  padding: 13px 0;
+  border: none;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #2f86ff, #1f66ff);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
 }
 </style>

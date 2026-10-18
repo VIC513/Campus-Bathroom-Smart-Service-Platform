@@ -15,7 +15,6 @@ import type {
 } from '@/types'
 import { FAULT_REASON_MAP } from '@/types'
 import {
-  mockGetBathhouses,
   mockGetBathhouse,
   mockTakeTicket,
   mockReserveStall,
@@ -147,27 +146,23 @@ function buildForecast(dto: PredictDto): WaitForecast {
 /* ================= 接口函数 ================= */
 
 /**
- * 浴室列表：31 栋 = 「1 号楼（真实后端）」 + 其余 30 栋（本地模拟）。
- * 真实 GET /api/stalls 组装 1 号楼，再从 mock 列表去掉 1 号楼补足 30 栋；
- * 后端未启动时整体回退为 31 栋纯模拟。
+ * 浴室列表：单楼模式（后端同学的单楼版服务，15 隔间 F01-F15）。
+ * 真实 GET /api/stalls 组装为长度 1 的数组；后端未启动时回退为 mock 单楼。
  */
 export async function getBathhouses(): Promise<Bathhouse[]> {
   return safeFetch(
     async () => {
       const data = await (http.get('/stalls') as Promise<StallDto[]>)
-      const real = buildBathhouseFromStalls(data)
-      const others = (await mockGetBathhouses()).filter((b) => b.id !== BATHHOUSE_ID)
-      return [real, ...others]
+      return [buildBathhouseFromStalls(data)]
     },
-    mockGetBathhouses
+    async () => [await mockGetBathhouse(BATHHOUSE_ID)]
   )
 }
 
-/** 单浴室详情：仅 1 号楼对接真实后端，其余楼栋直接返回本地模拟数据 */
+/** 单浴室详情：单楼模式，真实 GET /api/stalls；后端未启动时回退 mock */
 export async function getBathhouse(id: number): Promise<Bathhouse> {
   return safeFetch(
     async () => {
-      if (!isRealBuilding(id)) return mockGetBathhouse(id)
       const data = await (http.get('/stalls') as Promise<StallDto[]>)
       return buildBathhouseFromStalls(data)
     },

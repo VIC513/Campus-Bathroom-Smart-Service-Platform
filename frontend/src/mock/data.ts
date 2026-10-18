@@ -111,14 +111,17 @@ const ZONE_POOLS: string[][] = [
 ]
 
 /**
- * 生成全部 31 栋宿舍楼浴室（id=1…31，name 为「X号楼浴室」）。
- * 每栋楼隔间数在 12~30 之间浮动，均分到各分区（余数归第一区），保证总隔间数与生成一致。
+ * 生成浴室种子数据。
+ * 单楼模式：id=1 为「1 号楼浴室」，结构对齐后端同学的单楼版服务
+ * （15 个隔间 F01-F15、单 F 区），后端离线时兜底数据与真实后端显示一致。
+ * 其余 id 的楼栋仅保留供历史 mock 函数使用，不再展示在首页。
  */
 function makeAllBathhouses(): Bathhouse[] {
   const list: Bathhouse[] = []
   for (let i = 1; i <= 31; i++) {
-    const zones = ZONE_POOLS[(i - 1) % ZONE_POOLS.length]
-    const total = rand(12, 30)
+    // id=1 对齐后端结构；其余楼栋沿用字母分区池
+    const zones = i === 1 ? ['F区'] : ZONE_POOLS[(i - 1) % ZONE_POOLS.length]
+    const total = i === 1 ? 15 : rand(12, 30)
     const base = Math.floor(total / zones.length)
     const rem = total - base * zones.length
     const perZone = zones.map((_, zi) => (zi === 0 ? base + rem : base))
