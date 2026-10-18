@@ -50,6 +50,11 @@ async function tapStall(s: Stall) {
 
 /** 全满时排队等叫号（走后端 /queue，后端离线自动回退 mock） */
 async function joinQueue() {
+  // 还有空闲隔间时按钮为禁用态，点按仅提示不取号
+  if (!isFull()) {
+    showToast('当前还有空闲隔间，直接点格子选位即可')
+    return
+  }
   const t = await store.takeTicketAt(current()!.id)
   showToast(`取号成功，前面还有 ${t.ahead} 人`)
   router.push('/queue')
@@ -174,10 +179,10 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 全满时排队入口；有空位时不显示（直接点格子即可） -->
-      <button v-if="isFull()" class="queue-btn" @click="joinQueue">
+      <!-- 排队入口：常驻显示；有空闲隔间时禁用（灰色），全满时可点 -->
+      <button class="queue-btn" :class="{ disabled: !isFull() }" @click="joinQueue">
         <van-icon name="volume-o" />
-        当前无空闲隔间，排队等叫号
+        {{ isFull() ? '当前无空闲隔间，排队等叫号' : '有空闲隔间，点格子直接选位' }}
       </button>
 
       <!-- ========== 数据大盘（首页内嵌） ========== -->
@@ -360,6 +365,11 @@ onMounted(() => {
   justify-content: center;
   gap: 6px;
   cursor: pointer;
+}
+.queue-btn.disabled {
+  opacity: 0.55;
+  background: linear-gradient(135deg, #55606e, #3c4654);
+  cursor: not-allowed;
 }
 
 /* ========== 首页内嵌数据大盘 ========== */

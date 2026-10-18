@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast, showDialog } from 'vant'
+import { showToast, showDialog, showConfirmDialog } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { useUserStore } from '@/stores/user'
 
@@ -42,13 +42,18 @@ async function onFrequentTap() {
   })
 }
 
-/** 退出登录：确认后清除会话并跳转登录页 */
+/** 退出登录：确认后清除会话并跳转登录页（取消则不退出） */
 async function onLogout() {
-  await showDialog({
-    title: '退出登录',
-    message: '确定要退出当前账号吗？',
-    confirmButtonText: '退出',
-  })
+  try {
+    await showConfirmDialog({
+      title: '退出登录',
+      message: '确定要退出当前账号吗？',
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return // 用户点了「取消」或关闭弹窗 → 不退出
+  }
   userStore.logout()
   router.replace('/login')
 }
