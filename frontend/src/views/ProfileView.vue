@@ -90,7 +90,7 @@ async function onLogout() {
     <van-cell-group inset :style="{ marginTop: '12px', background: 'transparent' }">
       <van-cell title="数据大盘看板" icon="bar-chart-o" is-link to="/dashboard" />
       <van-cell title="我的排队记录" icon="orders-o" is-link to="/queue" />
-      <van-cell title="智能分流推荐" icon="guide-o" is-link to="/" />
+      <van-cell title="智能分流推荐" label="回首页查看实时等位建议与预测曲线" icon="guide-o" is-link to="/" />
       <van-cell title="使用帮助" icon="question-o" is-link />
       <van-cell title="关于本项目" icon="info-o" is-link />
       <!-- 退出登录：样式与其他功能入口保持一致，仅图标不同（power-o 在该字体子集缺失，用 user-o） -->

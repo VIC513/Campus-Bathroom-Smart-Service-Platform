@@ -4,10 +4,11 @@ import { useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { countStalls } from '@/mock/data'
-import { getWaterUsage } from '@/api'
+import { getWaterUsage, getWaitForecast } from '@/api'
 import WaterPeakChart from '@/components/WaterPeakChart.vue'
+import ForecastChart from '@/components/ForecastChart.vue'
 import FaultReportPopup from '@/components/FaultReportPopup.vue'
-import type { Bathhouse, Bathzone, FaultType, Stall, WaterPoint } from '@/types'
+import type { Bathhouse, Bathzone, FaultType, Stall, WaterPoint, WaitForecast } from '@/types'
 
 const store = useBathhouseStore()
 const router = useRouter()
@@ -130,14 +131,37 @@ function rateColor(v: number): string {
   return 'var(--full)'
 }
 
-onBeforeUnmount(() => {
-  if (simTimer) clearInterval(simTimer)
+/* ================= 智能分流推荐 =================
+ * 单楼模式下后端仅提供 1 栋浴室，不再做「跨楼推荐」；
+ * 这里把它做成「本浴室分流/等位建议」：基于实时占用给出结论，
+ * 并结合未来 1 小时等待预测曲线，建议立即使用还是错峰前往。
+ */
+const recommended = ref<WaitForecast | null>(null)
+
+/** 策略文案：根据当前空闲数与排队人数生成一句话建议 */
+const recommendText = computed(() => {
+  const b = current()
+  if (!b) return ''
+  const { idle } = countStalls(b.stalls)
+  const queue = b.queueCount ?? 0
+  if (idle === 0) {
+    return queue > 0
+      ? `当前全满，已有 ${queue} 人排队。建议取号等待，或选择错峰时段前往。`
+      : '当前全满，最近空位稍后释放，可点下方排队取号。'
+  }
+  return idle >= 3
+    ? `当前空闲 ${idle} 格，人员充足，建议直接点格子选位，无需等待。`
+    : `当前空闲 ${idle} 格，略有紧张，建议尽快前往或稍作等待。`
 })
+
+/** 峰值摘要文案 */
 
 onMounted(() => {
   store.fetchBathhouses()
   // 首页内嵌大盘：加载每日用水高峰曲线
   getWaterUsage().then((w) => (water.value = w))
+  // 加载未来 1 小时等位预测（供智能分流推荐曲线；离线自动回退 mock）
+  getWaitForecast(current()?.id ?? 1).then((f) => (recommended.value = f))
   // 自动开启持续仿真，无需用户手动开关
   simTimer = setInterval(simTick, 2500)
 })
@@ -199,6 +223,23 @@ onMounted(() => {
           <van-icon name="warning-o" />
           设备报修
         </button>
+      </div>
+
+      <!-- ========== 智能分流推荐 ========== -->
+      <div class="sec-title dash-title">
+        <span>智能分流推荐</span>
+        <span class="tip">实时状态 · 等位预测</span>
+      </div>
+
+      <div class="dash-card">
+        <!-- 策略结论 -->
+        <div class="reco-line">
+          <van-icon name="aim" color="var(--brand)" />
+          <span class="reco-text">{{ recommendText }}</span>
+        </div>
+        <!-- 未来 1 小时等位预测曲线 -->
+        <ForecastChart v-if="recommended" :forecast="recommended" />
+        <div class="legend">曲线为未来 1 小时预计等待分钟数，红色虚线为 30 分钟阈值；错峰时段建议在推荐区间前往</div>
       </div>
 
       <!-- ========== 数据大盘（首页内嵌） ========== -->
@@ -447,6 +488,22 @@ onMounted(() => {
   font-size: 11px;
   color: var(--text-sub);
   margin-top: 8px;
+}
+/* 智能分流推荐：结论行 */
+.reco-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  background: var(--brand-dim);
+  border: 1px solid rgba(7, 163, 90, 0.25);
+}
+.reco-text {
+  font-size: 13px;
+  color: var(--text-main);
+  line-height: 1.5;
 }
 .rows {
   display: flex;
