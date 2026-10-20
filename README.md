@@ -35,6 +35,8 @@
 ## 👨‍💻 负责人
 - 成员1 (后端 Lead & DevOps)
 
+C 端 H5 移动端 Web，**明亮清爽风**视觉（浅灰背景 + 白色卡片 + 绿/橙/红三态），优先保证答辩演示清晰度。
+
 本项目为纯软件架构的“数字孪生”后端，基于 Python FastAPI 构建。在无物理传感器硬件的限制下，通过自研的数据仿真引擎，实现了从状态生成、排队调度到实时推送的完整业务闭环。
 
 ## 📂 核心文件结构
@@ -67,6 +69,22 @@
    - 若隔间为 `occupied`（占用），累加已用时间；当时间超过系统生成的正态分布时长，流转回 `idle`。
 
 ---
+
+### 目录结构
+```
+frontend/
+├── src/
+│   ├── api/          # Axios 实例 + 接口封装（统一 REST 契约）
+│   ├── mock/         # Mock 数据 + 数据仿真（后端就绪前驱动全 UI 闭环）
+│   ├── socket/       # WebSocket 实时通道封装（含 MOCK 模拟推送）
+│   ├── stores/       # Pinia 全局状态（浴室列表 + 我的排队 + 登录用户）
+│   ├── components/   # BathhouseCard（浴室卡片）/ StallMap（拓扑图）
+│   ├── views/        # 6 个核心页面（登录 + 首页 + 详情 + 排队 + 大盘 + 我的）
+│   ├── types/        # 与后端共享的 TS 类型契约
+│   ├── router/       # 路由
+│   └── style.css     # 明亮清爽风全局样式（CSS 变量，:root 统一配置）
+└── vite.config.ts    # 含 /api /ws 代理（指向 FastAPI）
+```
 
 ## 🧠 模块二：核心业务 API 与状态机 (main.py)
 系统采用严格的四态机设计：`idle` (空闲) / `occupied` (占用) / `cleaning` (清理中) / `fault` (维修中)。共提供 20+ 个 RESTful 接口。

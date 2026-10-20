@@ -1,18 +1,19 @@
-/* ========== 全局样式 · 深色科技风 ========== */
+/* ========== 全局样式 · 明亮清爽风 ========== */
 :root {
-  --bg: #0b0f14;
-  --bg-card: #141b23;
-  --bg-card-2: #1a232e;
-  --text-main: #eaf2fb;
-  --text-sub: #8ba0b4;
-  --brand: #0fdc78;
-  --brand-dim: rgba(15, 220, 120, 0.14);
-  --free: #0fdc78;
-  --busy: #efaa17;
-  --full: #e8463a;
-  --offline: #3a4754;
-  --repair: #a78bfa;
-  --line: rgba(234, 242, 251, 0.08);
+  --bg: #f2f5f9;
+  --bg-page: #f2f5f9;
+  --bg-card: #ffffff;
+  --bg-card-2: #f7fafc;
+  --text-main: #1f2733;
+  --text-sub: #6b7a8d;
+  --brand: #07a35a;
+  --brand-dim: rgba(7, 163, 90, 0.12);
+  --free: #07a35a;
+  --busy: #e8900c;
+  --full: #e33e2e;
+  --offline: #c3ccd6;
+  --repair: #7d5cf0;
+  --line: rgba(31, 39, 51, 0.1);
   --radius: 12px;
 }
 
@@ -41,9 +42,9 @@ a {
   text-decoration: none;
 }
 
-/* Vant 深色主题下的细节修正 */
+/* Vant 亮色主题下的细节修正 */
 .van-tabbar {
-  background: rgba(13, 18, 24, 0.92);
+  background: rgba(255, 255, 255, 0.94);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
 }
