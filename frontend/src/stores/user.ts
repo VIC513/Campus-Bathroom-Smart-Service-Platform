@@ -31,7 +31,11 @@ function hashPwd(s: string): string {
 
 function loadUsers(): StoredUser[] {
   try {
-    return JSON.parse(localStorage.getItem(USERS_KEY) || '[]') as StoredUser[]
+    const list = JSON.parse(localStorage.getItem(USERS_KEY) || '[]') as StoredUser[]
+    // 清理早期预置的演示账号残留（202400001），恢复为仅用户自行注册的账号
+    const filtered = list.filter((x) => x.account !== '202400001')
+    if (filtered.length !== list.length) saveUsers(filtered)
+    return filtered
   } catch {
     return []
   }
