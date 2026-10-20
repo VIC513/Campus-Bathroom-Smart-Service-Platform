@@ -18,23 +18,31 @@ const avatarChar = computed(() => nickname.value.charAt(0))
 const todayCount = computed(() => store.myTickets.length)
 const savedMinutes = computed(() => store.myTickets.reduce((sum, t) => sum + t.waitMinutes, 0))
 
-/** 常去浴室：按取号/预约记录去重统计（同一浴室多次取号只计一次），显示具体浴室号（去掉"号楼"措辞） */
+/** 常去浴室：按浴室去重统计（同一浴室多次预约累计次数），显示「浴室 F01（N 次）」；新增预约后列表与次数实时变化 */
 const frequentList = computed(() => {
-  const names = new Map<number, string>()
+  const map = new Map<number, { no: string; count: number; last: number }>()
   for (const t of store.myTickets) {
     if (t.status === 'canceled') continue // 已取消的号不计入常去
-    if (!names.has(t.bathhouseId)) {
-      // 取具体浴室号：显示「浴室 F01」（两位补零，与隔间编号风格统一）
-      const m = /(\d+)\s*号楼/.exec(t.bathhouseName || '')
-      const no = m ? `浴室 F${String(Number(m[1])).padStart(2, '0')}` : t.bathhouseName || `#${t.bathhouseId}`
-      names.set(t.bathhouseId, no)
+    // 取具体浴室号：显示「浴室 F01」（两位补零，与隔间编号风格统一）
+    const m = /(\d+)\s*号楼/.exec(t.bathhouseName || '')
+    const no = m ? `浴室 F${String(Number(m[1])).padStart(2, '0')}` : t.bathhouseName || `#${t.bathhouseId}`
+    const cur = map.get(t.bathhouseId)
+    if (cur) {
+      cur.count++
+      cur.last = Math.max(cur.last, t.createdAt)
+    } else {
+      map.set(t.bathhouseId, { no, count: 1, last: t.createdAt })
     }
   }
-  return [...names.values()]
+  return [...map.values()].sort((a, b) => b.last - a.last)
 })
-const frequentCount = computed(() => frequentList.value.length)
 
-/** 点击「常去浴室」：无记录时提示，有记录时弹出常去楼列表 */
+/** 常去浴室数字：累计预约总次数（每次新增预约 +1） */
+const frequentCount = computed(
+  () => store.myTickets.filter((t) => t.status !== 'canceled').length,
+)
+
+/** 点击「常去浴室」：无记录时提示，有记录时弹出常去浴室列表（含累计次数） */
 async function onFrequentTap() {
   if (!frequentList.value.length) {
     showToast('还没有取号记录，取号后这里自动统计')
@@ -42,7 +50,7 @@ async function onFrequentTap() {
   }
   await showDialog({
     title: '常去浴室号',
-    message: frequentList.value.map((n) => `· ${n}`).join('\n'),
+    message: frequentList.value.map((n) => `· ${n.no}（${n.count} 次）`).join('\n'),
     confirmButtonText: '知道了',
   })
 }
