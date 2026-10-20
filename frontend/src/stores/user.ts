@@ -61,9 +61,9 @@ export const useUserStore = defineStore('user', () => {
     setCurrentUserId(u?.account ?? 'student001')
   }
 
-  /** 账号格式校验：9 位学号，或 11 位手机号 */
+  /** 账号格式校验：9 位学号，或「1 开头、第二位 3-9、共 11 位」的正确手机号 */
   function validAccount(account: string): boolean {
-    return /^\d{9}$/.test(account) || /^1\d{10}$/.test(account)
+    return /^\d{9}$/.test(account) || /^1[3-9]\d{9}$/.test(account)
   }
 
   /** 登录成功返回 null，失败返回错误文案 */
@@ -75,16 +75,15 @@ export const useUserStore = defineStore('user', () => {
     return null
   }
 
-  /** 注册成功返回 null（注册后自动登录），失败返回错误文案；nickname 可空，缺省为「同学」 */
+  /** 注册：账号已存 localStorage（密码哈希），注册成功后不自动登录，需回登录页手动登录 */
   function register(account: string, password: string, nickname = ''): string | null {
-    if (!validAccount(account)) return '请输入 9 位学号或 11 位手机号'
+    if (!validAccount(account)) return '请输入 9 位学号或正确的 11 位手机号'
     if (password.length < 6) return '密码至少 6 位'
     const users = loadUsers()
     if (users.some((x) => x.account === account)) return '该账号已注册，请直接登录'
     const pw = hashPwd(password)
     users.push({ account, pw, nickname: nickname || undefined })
     saveUsers(users)
-    persist({ account, nickname: nickname || undefined })
     return null
   }
 

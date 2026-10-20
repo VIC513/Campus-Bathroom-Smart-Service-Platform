@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showSuccessToast, showFailToast } from 'vant'
 import { useUserStore } from '@/stores/user'
@@ -7,8 +7,9 @@ import { useUserStore } from '@/stores/user'
 /**
  * 登录/注册页：
  * - 未登录时唯一入口（路由守卫强制跳转）
- * - 登录：学号或手机号 + 密码
- * - 第一次使用可切换到「注册」，注册成功自动登录
+ * - 登录：学号或手机号 + 密码（账号已注册的会提示直接登录）
+ * - 注册：学号或正确手机号 + 密码 + 图形验证码；注册成功**不自动登录**，
+ *   回到登录 tab 预填账号，由用户手动登录（演示「账号已记住」）
  */
 const store = useUserStore()
 const router = useRouter()
@@ -29,12 +30,67 @@ function switchMode(m: 'login' | 'register') {
   confirmPwd.value = ''
 }
 
-/** 校验登录/注册表单，返回错误文案（无错误返回 null） */
+/* ================= 图形验证码（注册时校验） ================= */
+
+const inputCode = ref('')
+/** 当前验证码内容（刷新时重新生成） */
+const codeText = ref('')
+/** 验证码画布元素（模板 ref 绑定） */
+const canvasEl = ref<HTMLCanvasElement | null>(null)
+
+/** 生成 4 位随机验证码（排除易混淆的 0/O/1/I）并绘制到画布 */
+function genCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let s = ''
+  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)]
+  codeText.value = s
+  drawCode()
+}
+
+/** 在 canvas 上绘制带干扰线/噪点的验证码 */
+function drawCode() {
+  const cv = canvasEl.value
+  if (!cv) return
+  const ctx = cv.getContext('2d')
+  if (!ctx) return
+  const W = cv.width
+  const H = cv.height
+  ctx.clearRect(0, 0, W, H)
+  // 浅色背景
+  ctx.fillStyle = 'rgba(64, 158, 255, 0.08)'
+  ctx.fillRect(0, 0, W, H)
+  // 逐字符绘制：随机颜色 + 随机上下偏移
+  for (let i = 0; i < codeText.value.length; i++) {
+    ctx.font = `${16 + Math.random() * 4}px "Arial Black", sans-serif`
+    ctx.fillStyle = `hsl(${Math.floor(Math.random() * 360)}, 60%, 45%)`
+    ctx.save()
+    ctx.translate(10 + i * 17, 21 + (Math.random() * 6 - 3))
+    ctx.rotate((Math.random() * 0.5 - 0.25) * Math.PI / 3)
+    ctx.fillText(codeText.value[i], 0, 0)
+    ctx.restore()
+  }
+  // 干扰线 + 噪点
+  for (let i = 0; i < 3; i++) {
+    ctx.strokeStyle = `rgba(64, 158, 255, ${0.2 + Math.random() * 0.3})`
+    ctx.beginPath()
+    ctx.moveTo(Math.random() * W, Math.random() * H)
+    ctx.lineTo(Math.random() * W, Math.random() * H)
+    ctx.stroke()
+  }
+  for (let i = 0; i < 20; i++) {
+    ctx.fillStyle = 'rgba(64, 158, 255, 0.4)'
+    ctx.fillRect(Math.random() * W, Math.random() * H, 1.5, 1.5)
+  }
+}
+
+/** 校验表单：返回错误文案（无错误返回 null） */
 function validate(): string | null {
   if (!account.value.trim()) return '请输入学号或手机号'
   if (!password.value) return '请输入密码'
   if (mode.value === 'register') {
     if (confirmPwd.value !== password.value) return '两次输入的密码不一致'
+    if (!inputCode.value.trim()) return '请输入验证码'
+    if (inputCode.value.trim().toUpperCase() !== codeText.value.toUpperCase()) return '验证码错误，请重新输入'
   }
   return null
 }
@@ -43,20 +99,42 @@ async function submit() {
   const err = validate()
   if (err) {
     showFailToast(err)
+    if (err.includes('验证码')) genCode() // 验证码错误时自动刷新一张
     return
   }
-  const result = mode.value === 'login'
-    ? store.login(account.value.trim(), password.value)
-    : store.register(account.value.trim(), password.value, nickname.value.trim())
-  if (result) {
-    showFailToast(result)
-    return
+  const accountVal = account.value.trim()
+  if (mode.value === 'login') {
+    const result = store.login(accountVal, password.value)
+    if (result) {
+      showFailToast(result)
+      return
+    }
+    showSuccessToast('登录成功')
+    const redirect = (route.query.redirect as string) || '/'
+    router.replace(redirect)
+  } else {
+    // 注册：成功不自动登录，回登录 tab 预填账号
+    const result = store.register(accountVal, password.value, nickname.value.trim())
+    if (result) {
+      showFailToast(result)
+      if (result.includes('验证码')) genCode()
+      return
+    }
+    showSuccessToast('注册成功，请登录')
+    // 回登录 tab（账号已预留在输入框，密码已清空，验证码由 watch 刷新）
+    switchMode('login')
   }
-  showSuccessToast(mode.value === 'login' ? '登录成功' : '注册成功，已自动登录')
-  // 有回跳地址则回跳（如点详情页被拦截时），否则回首页
-  const redirect = (route.query.redirect as string) || '/'
-  router.replace(redirect)
 }
+
+onMounted(genCode)
+
+// canvas 元素挂载后可绘制验证码；切到注册 tab 时刷新验证码（防复用旧码）
+watch(canvasEl, (cv) => {
+  if (cv && codeText.value) drawCode()
+})
+watch(mode, (m) => {
+  if (m === 'register') genCode()
+})
 </script>
 
 <template>
@@ -95,6 +173,26 @@ async function submit() {
       <div v-if="mode === 'register'" class="field">
         <label>确认密码</label>
         <input v-model="confirmPwd" type="password" placeholder="再输入一次密码" />
+      </div>
+      <div v-if="mode === 'register'" class="field">
+        <label>图形验证码</label>
+        <div class="code-row">
+          <input
+            v-model="inputCode"
+            type="text"
+            maxlength="4"
+            placeholder="输入右侧验证码"
+            class="code-input"
+          />
+          <canvas
+            ref="canvasEl"
+            class="code-canvas"
+            width="88"
+            height="34"
+            title="看不清？点击刷新"
+            @click="genCode"
+          />
+        </div>
       </div>
 
       <button class="submit-btn" @click="submit">
@@ -199,6 +297,23 @@ async function submit() {
 }
 .field input:focus {
   border-color: var(--primary);
+}
+/* 验证码行：输入框 + 画布 */
+.code-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+.code-row .code-input {
+  flex: 1;
+}
+.code-canvas {
+  width: 88px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--bg-page);
 }
 .submit-btn {
   width: 100%;
