@@ -18,20 +18,19 @@ const avatarChar = computed(() => nickname.value.charAt(0))
 const todayCount = computed(() => store.myTickets.length)
 const savedMinutes = computed(() => store.myTickets.reduce((sum, t) => sum + t.waitMinutes, 0))
 
-/** 常去浴室：按浴室去重统计（同一浴室多次预约累计次数），显示「浴室 F01（N 次）」；新增预约后列表与次数实时变化 */
+/** 常去浴室：按预约的隔间统计（同一隔间多次预约累计次数），显示预约的具体隔间号如「F12（N 次）」；新增预约后实时变化 */
 const frequentList = computed(() => {
-  const map = new Map<number, { no: string; count: number; last: number }>()
+  const map = new Map<string, { no: string; count: number; last: number }>()
   for (const t of store.myTickets) {
     if (t.status === 'canceled') continue // 已取消的号不计入常去
-    // 取具体浴室号：显示「浴室 F01」（两位补零，与隔间编号风格统一）
-    const m = /(\d+)\s*号楼/.exec(t.bathhouseName || '')
-    const no = m ? `浴室 F${String(Number(m[1])).padStart(2, '0')}` : t.bathhouseName || `#${t.bathhouseId}`
-    const cur = map.get(t.bathhouseId)
+    // 显示预约的具体隔间号（预约 F12 就显示 F12）
+    const no = t.assignedStall || t.code || `#${t.bathhouseId}`
+    const cur = map.get(no)
     if (cur) {
       cur.count++
       cur.last = Math.max(cur.last, t.createdAt)
     } else {
-      map.set(t.bathhouseId, { no, count: 1, last: t.createdAt })
+      map.set(no, { no, count: 1, last: t.createdAt })
     }
   }
   return [...map.values()].sort((a, b) => b.last - a.last)
