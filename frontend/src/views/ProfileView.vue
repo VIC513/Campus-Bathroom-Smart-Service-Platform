@@ -24,9 +24,9 @@ const frequentList = computed(() => {
   for (const t of store.myTickets) {
     if (t.status === 'canceled') continue // 已取消的号不计入常去
     if (!names.has(t.bathhouseId)) {
-      // 取具体浴室号：优先取名称里的数字（如 "1号楼浴室" → "1号浴室"），否则用 id
+      // 取具体浴室号：按「F01」格式显示（浴室号两位补零，与隔间编号风格统一）
       const m = /(\d+)\s*号楼/.exec(t.bathhouseName || '')
-      const no = m ? `${m[1]}号浴室` : t.bathhouseName || `浴室 ${t.bathhouseId}`
+      const no = m ? `F${String(Number(m[1])).padStart(2, '0')}` : t.bathhouseName || `#${t.bathhouseId}`
       names.set(t.bathhouseId, no)
     }
   }
