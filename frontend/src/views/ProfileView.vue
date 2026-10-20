@@ -18,12 +18,17 @@ const avatarChar = computed(() => nickname.value.charAt(0))
 const todayCount = computed(() => store.myTickets.length)
 const savedMinutes = computed(() => store.myTickets.reduce((sum, t) => sum + t.waitMinutes, 0))
 
-/** 常去浴室：按取号/预约记录去重统计（同一楼栋多次取号只计一次） */
+/** 常去浴室：按取号/预约记录去重统计（同一浴室多次取号只计一次），显示具体浴室号（去掉"号楼"措辞） */
 const frequentList = computed(() => {
   const names = new Map<number, string>()
   for (const t of store.myTickets) {
     if (t.status === 'canceled') continue // 已取消的号不计入常去
-    if (!names.has(t.bathhouseId)) names.set(t.bathhouseId, t.bathhouseName || `#${t.bathhouseId}`)
+    if (!names.has(t.bathhouseId)) {
+      // 取具体浴室号：优先取名称里的数字（如 "1号楼浴室" → "1号浴室"），否则用 id
+      const m = /(\d+)\s*号楼/.exec(t.bathhouseName || '')
+      const no = m ? `${m[1]}号浴室` : t.bathhouseName || `浴室 ${t.bathhouseId}`
+      names.set(t.bathhouseId, no)
+    }
   }
   return [...names.values()]
 })
@@ -36,7 +41,7 @@ async function onFrequentTap() {
     return
   }
   await showDialog({
-    title: '常去浴室',
+    title: '常去浴室号',
     message: frequentList.value.map((n) => `· ${n}`).join('\n'),
     confirmButtonText: '知道了',
   })
