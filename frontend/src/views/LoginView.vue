@@ -226,9 +226,6 @@ watch(mode, (m) => {
           {{ mode === 'login' ? '去注册' : '去登录' }}
         </span>
       </div>
-
-      <!-- 演示账号提示（新环境预置账号，登录即用） -->
-      <div class="demo-tip">演示账号 202400001 / 123456</div>
     </div>
 
     <div class="foot">仅用于课程演示，账号数据保存在本机</div>
@@ -373,13 +370,6 @@ watch(mode, (m) => {
 .tips b {
   color: var(--primary);
   font-weight: 600;
-}
-.demo-tip {
-  margin-top: 10px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-sub);
-  opacity: 0.85;
 }
 .foot {
   margin-top: auto;
