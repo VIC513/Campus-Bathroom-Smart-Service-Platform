@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { showSuccessToast, showFailToast } from 'vant'
+import { showSuccessToast, showFailToast, showToast } from 'vant'
 import { useUserStore } from '@/stores/user'
 
 /**
@@ -23,11 +23,18 @@ const account = ref('')
 const nickname = ref('')
 const password = ref('')
 const confirmPwd = ref('')
+/** 提交失败的内联错误提示（比 toast 更醒目持久） */
+const formError = ref('')
 
-function switchMode(m: 'login' | 'register') {
+/** 切换登录/注册 tab：清空另一界面残留内容。keepAccount=true 时保留账号（注册成功回登录预填用） */
+function switchMode(m: 'login' | 'register', keepAccount = false) {
   mode.value = m
+  if (!keepAccount) account.value = ''
+  nickname.value = ''
   password.value = ''
   confirmPwd.value = ''
+  inputCode.value = ''
+  formError.value = ''
 }
 
 /* ================= 图形验证码（注册时校验） ================= */
@@ -98,15 +105,22 @@ function validate(): string | null {
 async function submit() {
   const err = validate()
   if (err) {
-    showFailToast(err)
+    formError.value = err
     if (err.includes('验证码')) genCode() // 验证码错误时自动刷新一张
     return
   }
+  formError.value = ''
   const accountVal = account.value.trim()
   if (mode.value === 'login') {
     const result = store.login(accountVal, password.value)
     if (result) {
-      showFailToast(result)
+      formError.value = result
+      // 账号未注册：自动切到注册 tab 预填账号密码，补个验证码即可继续
+      if (result.includes('未注册')) {
+        showToast('该账号尚未注册，已帮你切到注册，补完信息即可')
+        switchMode('register', true)
+        inputCode.value = ''
+      }
       return
     }
     showSuccessToast('登录成功')
@@ -116,13 +130,13 @@ async function submit() {
     // 注册：成功不自动登录，回登录 tab 预填账号
     const result = store.register(accountVal, password.value, nickname.value.trim())
     if (result) {
-      showFailToast(result)
+      formError.value = result
       if (result.includes('验证码')) genCode()
       return
     }
     showSuccessToast('注册成功，请登录')
-    // 回登录 tab（账号已预留在输入框，密码已清空，验证码由 watch 刷新）
-    switchMode('login')
+    // 回登录 tab（账号预留在输入框，密码已清空，验证码由 watch 刷新）
+    switchMode('login', true)
   }
 }
 
@@ -164,7 +178,11 @@ watch(mode, (m) => {
       </div>
       <div class="field">
         <label>密码</label>
-        <input v-model="password" type="password" placeholder="至少 6 位" />
+        <input
+          v-model="password"
+          type="password"
+          :placeholder="mode === 'login' ? '请输入密码' : '至少 6 位'"
+        />
       </div>
       <div v-if="mode === 'register'" class="field">
         <label>昵称</label>
@@ -195,6 +213,8 @@ watch(mode, (m) => {
         </div>
       </div>
 
+      <div v-if="formError" class="form-error">{{ formError }}</div>
+
       <button class="submit-btn" @click="submit">
         {{ mode === 'login' ? '登 录' : '注 册' }}
       </button>
@@ -202,10 +222,13 @@ watch(mode, (m) => {
       <div class="tips">
         <span v-if="mode === 'login'">第一次使用？</span>
         <span v-else>已有账号？</span>
-        <b @click="switchMode(mode === 'login' ? 'register' : 'login')">
-          {{ mode === 'login' ? '立即注册' : '去登录' }}
-        </b>
+        <span class="switch" @click="switchMode(mode === 'login' ? 'register' : 'login')">
+          {{ mode === 'login' ? '去注册' : '去登录' }}
+        </span>
       </div>
+
+      <!-- 演示账号提示（新环境预置账号，登录即用） -->
+      <div class="demo-tip">演示账号 202400001 / 123456</div>
     </div>
 
     <div class="foot">仅用于课程演示，账号数据保存在本机</div>
@@ -315,6 +338,17 @@ watch(mode, (m) => {
   cursor: pointer;
   background: var(--bg-page);
 }
+/* 提交失败的内联错误提示 */
+.form-error {
+  margin-top: 14px;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--full);
+  background: rgba(227, 62, 46, 0.08);
+  border: 1px solid rgba(227, 62, 46, 0.25);
+  border-radius: 10px;
+}
 .submit-btn {
   width: 100%;
   padding: 13px 0;
@@ -339,6 +373,13 @@ watch(mode, (m) => {
 .tips b {
   color: var(--primary);
   font-weight: 600;
+}
+.demo-tip {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-sub);
+  opacity: 0.85;
 }
 .foot {
   margin-top: auto;

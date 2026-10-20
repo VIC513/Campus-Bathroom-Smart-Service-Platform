@@ -22,6 +22,9 @@ interface StoredUser extends UserRecord {
 const USERS_KEY = 'bath_users'
 const SESSION_KEY = 'bath_session'
 
+/** 预置演示账号：学号 202400001，密码 123456 */
+const DEMO_ACCOUNT = '202400001'
+
 /** 简易哈希（演示用，避免 localStorage 里出现明文密码） */
 function hashPwd(s: string): string {
   let h = 5381
@@ -31,7 +34,14 @@ function hashPwd(s: string): string {
 
 function loadUsers(): StoredUser[] {
   try {
-    return JSON.parse(localStorage.getItem(USERS_KEY) || '[]') as StoredUser[]
+    const list = JSON.parse(localStorage.getItem(USERS_KEY) || '[]') as StoredUser[]
+    // 首次打开预置演示账号，无需先注册即可登录（答辩演示友好）
+    if (!list.length) {
+      const demo: StoredUser = { account: DEMO_ACCOUNT, pw: hashPwd('123456'), nickname: '同学' }
+      saveUsers([demo])
+      return [demo]
+    }
+    return list
   } catch {
     return []
   }
