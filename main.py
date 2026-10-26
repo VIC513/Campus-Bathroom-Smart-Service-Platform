@@ -1,6 +1,6 @@
 """
 校园浴室智能调度系统 - 后端 API
-单楼栋女生版 + 仿真器 + Redis + WebSocket
+单楼栋女生版 + 仿真器 + Redis List 排队 + WebSocket
 成员1：后端 Lead & DevOps
 """
 
@@ -11,30 +11,56 @@ from datetime import datetime
 import random
 import redis
 import json
+import jwt
+import hashlib
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends   # 如果你原来没导 Depends，记得加上
 
 from simulator import simulator
-
 
 # ============================================================
 # 1. FastAPI 应用
 # ============================================================
 app = FastAPI(
     title="校园浴室智能调度 API",
-    description="单楼栋女生版（Redis + WebSocket 版）",
-    version="3.0.0"
+    description="单楼栋女生版（Redis List + WebSocket 版）",
+    version="4.0.0"
 )
 
+SECRET_KEY = "campus_bathroom_secret_key_2026"
+ALGORITHM = "HS256"
+security = HTTPBearer(auto_error=False)
+class AuthModel(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+def get_hash(pwd: str) -> str: return hashlib.sha256(pwd.encode()).hexdigest()
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if not credentials: return None
+    try:
+        return jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+    except:
+        raise HTTPException(status_code=401, detail="无效或过期的凭证")
+
+def require_user(user: dict = Depends(get_current_user)):
+    if user is None: raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+def require_admin(user: dict = Depends(get_current_user)):
+    if user is None or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="权限不足，需要管理员身份")
+    return user
 
 # ============================================================
-# 2. Redis 连接
+# 2. Redis 连接与 Key 定义
 # ============================================================
 r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
+QUEUE_KEY = "queue:female"  # 使用 Redis List 存排队队列
 
 # ============================================================
 # 3. WebSocket 连接管理
 # ============================================================
-
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -56,38 +82,30 @@ class ConnectionManager:
             except Exception:
                 pass
 
-
 manager = ConnectionManager()
-
 
 # ============================================================
 # 4. 预设选项
 # ============================================================
-
 FAULT_REASONS = [
     "水温异常", "门锁损坏", "花洒堵塞", "水压不足",
     "水温调节旋钮损坏", "无储物架或储物架损坏", "其他"
 ]
-
 CLEANING_REASONS = [
     "有前人留下的垃圾", "地面严重积水", "有异味", "其他"
 ]
 
-
 # ============================================================
 # 5. 数据模型
 # ============================================================
-
 class Stall(BaseModel):
     stall_id: str
     status: str
     gender: str = "female"
     used_seconds: int = 0
 
-
 class QueueRequest(BaseModel):
     user_id: str
-
 
 class QueueResponse(BaseModel):
     ticket_id: str
@@ -95,30 +113,24 @@ class QueueResponse(BaseModel):
     estimated_wait: int
     stall_id: Optional[str]
 
-
 class FeedbackRequest(BaseModel):
     stall_id: str
     reason: str
     detail: Optional[str] = ""
     user_id: str
 
-
 # ============================================================
-# 6. Redis 数据操作
+# 6. Redis 数据操作工具
 # ============================================================
-
 def init_stalls() -> List[dict]:
     return [
         {"stall_id": f"F{i:02d}", "status": "idle", "gender": "female", "used_seconds": 0}
         for i in range(1, 16)
     ]
 
-
 def redis_init():
     if not r.exists("stalls"):
         r.set("stalls", json.dumps(init_stalls()))
-    if not r.exists("queues"):
-        r.set("queues", json.dumps({"female": []}))
     if not r.exists("feedback"):
         r.set("feedback", json.dumps([]))
     if not r.exists("ticket_counter"):
@@ -127,57 +139,42 @@ def redis_init():
         r.set("ticket_to_stall", json.dumps({}))
     print("[Redis] 初始化完成")
 
-
 def get_stalls() -> List[dict]:
     return json.loads(r.get("stalls"))
-
 
 def save_stalls(stalls: List[dict]):
     r.set("stalls", json.dumps(stalls))
 
-
-def get_queues() -> dict:
-    return json.loads(r.get("queues"))
-
-
-def save_queues(queues: dict):
-    r.set("queues", json.dumps(queues))
-
-
 def get_feedbacks() -> List[dict]:
     return json.loads(r.get("feedback"))
-
 
 def save_feedbacks(feedbacks: List[dict]):
     r.set("feedback", json.dumps(feedbacks))
 
-
 def get_counter() -> dict:
     return json.loads(r.get("ticket_counter"))
-
 
 def save_counter(counter: dict):
     r.set("ticket_counter", json.dumps(counter))
 
-
 def get_ticket_map() -> dict:
     return json.loads(r.get("ticket_to_stall"))
-
 
 def save_ticket_map(m):
     r.set("ticket_to_stall", json.dumps(m))
 
+def get_queue_length() -> int:
+    # 获取 Redis List 里的排队人数
+    return r.llen(QUEUE_KEY)
 
 # ============================================================
-# 7. 工具函数
+# 7. 通用工具
 # ============================================================
-
 def find_stall(stall_id: str) -> Optional[dict]:
     for s in get_stalls():
         if s["stall_id"] == stall_id:
             return s
     return None
-
 
 def update_stall(stall_id: str, **kwargs):
     stalls = get_stalls()
@@ -187,10 +184,8 @@ def update_stall(stall_id: str, **kwargs):
             break
     save_stalls(stalls)
 
-
 def count_by_status(status: str) -> int:
     return len([s for s in get_stalls() if s["status"] == status])
-
 
 def mark_feedback_done(stall_id: str):
     feedbacks = get_feedbacks()
@@ -200,7 +195,6 @@ def mark_feedback_done(stall_id: str):
             f["done_time"] = datetime.now().isoformat()
     save_feedbacks(feedbacks)
 
-
 def mark_all_feedback_done(feedback_type: str):
     feedbacks = get_feedbacks()
     for f in feedbacks:
@@ -209,28 +203,20 @@ def mark_all_feedback_done(feedback_type: str):
             f["done_time"] = datetime.now().isoformat()
     save_feedbacks(feedbacks)
 
-
 # ============================================================
-# 8. 启动事件：绑定 Redis + WebSocket 回调
+# 8. 启动事件 & WebSocket 端点
 # ============================================================
-
 @app.on_event("startup")
 async def startup_event():
     redis_init()
     simulator.attach_redis(r)
 
     async def on_update(stalls):
-        """仿真器状态变化时，通过 WebSocket 推送"""
         message = json.dumps({"type": "stalls_update", "data": stalls})
         await manager.broadcast(message)
 
     simulator.set_update_callback(on_update)
     print("[启动] 仿真器已绑定 Redis + WebSocket 回调")
-
-
-# ============================================================
-# 9. WebSocket 端点
-# ============================================================
 
 @app.websocket("/ws/stalls")
 async def websocket_stalls(websocket: WebSocket):
@@ -241,19 +227,33 @@ async def websocket_stalls(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
+# ============================================================
+# 9. GET 接口
+# ============================================================
+@app.post("/auth/registert")
+def register(data: AuthModel):
+    if r.exists(f"user:{data.username}"): raise HTTPException(400, "用户名已存在")
+    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": data.role}))
+    return {"message": "注册成功"}
 
-# ============================================================
-# 10. GET 接口
-# ============================================================
+@app.post("/auth/login")
+def login(data: AuthModel):
+    user_raw = r.get(f"user:{data.username}")
+    if not user_raw: raise HTTPException(400, "账号或密码错误")
+    user_info = json.loads(user_raw)
+    if user_info["password"] != get_hash(data.password): raise HTTPException(400, "账号或密码错误")
+    
+    token = jwt.encode({"sub": data.username, "role": user_info["role"]}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "role": user_info["role"], "username": data.username}
+
 
 @app.get("/")
 def root():
     return {
-        "message": "校园浴室智能调度系统 API（Redis + WebSocket 版）",
+        "message": "校园浴室智能调度系统 API（Redis List + WebSocket 版）",
         "docs": "http://127.0.0.1:8000/docs",
         "websocket": "ws://127.0.0.1:8000/ws/stalls"
     }
-
 
 @app.get("/health")
 def health():
@@ -266,7 +266,7 @@ def health():
         "status": "ok",
         "redis": redis_status,
         "time": datetime.now().isoformat(),
-        "version": "3.0.0"
+        "version": "4.0.0"
     }
 
 
@@ -278,7 +278,6 @@ def get_stats():
     occupied = count_by_status("occupied")
     cleaning = count_by_status("cleaning")
     fault = count_by_status("fault")
-    queues = get_queues()
 
     return {
         "total_stalls": total,
@@ -286,10 +285,9 @@ def get_stats():
         "occupied_stalls": occupied,
         "cleaning_stalls": cleaning,
         "fault_stalls": fault,
-        "queue_length": len(queues.get("female", [])),
+        "queue_length": get_queue_length(),
         "usage_rate": round(occupied / total, 2) if total > 0 else 0
     }
-
 
 @app.get("/stalls")
 def get_stalls_api(status: Optional[str] = None, stall_id: Optional[str] = None):
@@ -303,11 +301,9 @@ def get_stalls_api(status: Optional[str] = None, stall_id: Optional[str] = None)
         return [s for s in stalls if s["status"] == status]
     return stalls
 
-
 @app.get("/predict")
 def predict():
-    queues = get_queues()
-    queue_len = len(queues.get("female", []))
+    queue_len = get_queue_length()
     idle_count = count_by_status("idle")
     hour = datetime.now().hour
 
@@ -340,12 +336,10 @@ def predict():
         "current_hour": hour
     }
 
-
 @app.get("/recommend")
 def recommend():
-    queues = get_queues()
     idle_count = count_by_status("idle")
-    queue_len = len(queues.get("female", []))
+    queue_len = get_queue_length()
 
     if idle_count == 0 and queue_len == 0:
         suggestion = "暂时没有空闲隔间，建议稍后再来"
@@ -366,7 +360,50 @@ def recommend():
         "idle_stalls": idle_count,
         "queue_length": queue_len
     }
-
+@app.get("/queue/my_ticket")
+def get_my_ticket(user: dict = Depends(require_user)):
+    """
+    查询当前登录用户自己的排队/使用状态
+    """
+    username = user.get("sub") # 从 Token 里获取当前登录的用户名
+    
+    # 1. 查排队队列（Redis List）
+    # 取出当前队列里的所有票号
+    queue_list = r.lrange(QUEUE_KEY, 0, -1) 
+    
+    # 2. 查已经分配了隔间的映射表（Redis Hash/String）
+    ticket_map = get_ticket_map()
+    
+    # 3. 因为票号里没有直接存用户名，我们需要一个小机制：
+    # 我们可以在取票时，把 user_id 和 ticket_id 绑定一下存起来。
+    # 为了简单，我们查一下队列里有没有前缀是这个用户的票。
+    # （为了严谨，最好在 /queue 取票时，把 ticket_id 存进 Redis 的 user:{username}:ticket 里）
+    
+    # 我们新增一个查询：这个用户有没有票
+    my_ticket_id = r.get(f"user:{username}:ticket")
+    
+    if not my_ticket_id:
+        return {"status": "no_ticket", "message": "您当前没有取号排队"}
+        
+    # 判断这个票是在排队，还是已经分配了
+    if my_ticket_id in queue_list:
+        position = queue_list.index(my_ticket_id) + 1
+        return {
+            "status": "queuing",
+            "ticket_id": my_ticket_id,
+            "position": position,
+            "message": f"您正在排队中，前面还有 {position - 1} 人"
+        }
+    elif my_ticket_id in ticket_map:
+        stall_id = ticket_map[my_ticket_id]
+        return {
+            "status": "in_use",
+            "ticket_id": my_ticket_id,
+            "stall_id": stall_id,
+            "message": f"您已分配到 {stall_id} 隔间，请前往使用"
+        }
+    else:
+        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}
 
 @app.get("/admin/feedback")
 def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None):
@@ -376,7 +413,6 @@ def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None)
     if status:
         result = [f for f in result if f["status"] == status]
     return result
-
 
 @app.get("/admin/pending")
 def admin_pending():
@@ -388,21 +424,20 @@ def admin_pending():
         "pending_feedbacks": len([f for f in feedbacks if f["status"] == "pending"])
     }
 
-
 # ============================================================
-# 11. POST 接口（用户操作）
+# 10. POST 接口（用户操作）
 # ============================================================
-
 @app.post("/queue", response_model=QueueResponse)
-def join_queue(req: QueueRequest):
+def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
     counter = get_counter()
     counter["female"] += 1
     ticket_id = f"F{counter['female']:04d}"
     save_counter(counter)
-
+    # 把这行加上，绑定用户和票号（有效期一天）
+    username = user.get("sub")
+    r.set(f"user:{req.user_id}:ticket", ticket_id, ex=86400) 
     stalls = get_stalls()
     idle_stalls = [s for s in stalls if s["status"] == "idle"]
-
     if idle_stalls:
         stall = idle_stalls[0]
         stall["status"] = "occupied"
@@ -420,10 +455,9 @@ def join_queue(req: QueueRequest):
             stall_id=stall["stall_id"]
         )
 
-    queues = get_queues()
-    queues["female"].append(ticket_id)
-    save_queues(queues)
-    position = len(queues["female"])
+    # 改造点：入队用 Redis List
+    r.rpush(QUEUE_KEY, ticket_id)
+    position = r.llen(QUEUE_KEY)
     return QueueResponse(
         ticket_id=ticket_id,
         position=position,
@@ -431,13 +465,11 @@ def join_queue(req: QueueRequest):
         stall_id=None
     )
 
-
 @app.post("/queue/cancel")
-def cancel_queue(ticket_id: str):
-    queues = get_queues()
-    if ticket_id in queues["female"]:
-        queues["female"].remove(ticket_id)
-        save_queues(queues)
+def cancel_queue(ticket_id: str,user: dict = Depends(require_user)):
+    # 改造点：从 Redis List 移除
+    removed = r.lrem(QUEUE_KEY, 1, ticket_id)
+    if removed > 0:
         return {"message": "已取消排队", "ticket_id": ticket_id}
 
     ticket_map = get_ticket_map()
@@ -454,9 +486,8 @@ def cancel_queue(ticket_id: str):
 
     raise HTTPException(status_code=404, detail="票号不存在")
 
-
 @app.post("/feedback/fault")
-def submit_fault(req: FeedbackRequest):
+def submit_fault(req: FeedbackRequest, user: dict = Depends(require_user)):
     if find_stall(req.stall_id) is None:
         raise HTTPException(status_code=404, detail=f"隔间 {req.stall_id} 不存在")
 
@@ -476,12 +507,10 @@ def submit_fault(req: FeedbackRequest):
         "status": "pending"
     })
     save_feedbacks(feedbacks)
-
     return {"message": "报修已提交", "stall_id": req.stall_id, "reason": req.reason}
 
-
 @app.post("/feedback/cleaning")
-def submit_cleaning(req: FeedbackRequest):
+def submit_cleaning(req: FeedbackRequest, user: dict = Depends(require_user)):
     if find_stall(req.stall_id) is None:
         raise HTTPException(status_code=404, detail=f"隔间 {req.stall_id} 不存在")
 
@@ -501,16 +530,13 @@ def submit_cleaning(req: FeedbackRequest):
         "status": "pending"
     })
     save_feedbacks(feedbacks)
-
     return {"message": "报清理已提交", "stall_id": req.stall_id, "reason": req.reason}
 
-
 # ============================================================
-# 12. POST 接口（管理员）
+# 11. POST 接口（管理员）
 # ============================================================
-
 @app.post("/admin/maintenance-all")
-def toggle_maintenance_all():
+def toggle_maintenance_all( admin: dict = Depends(require_admin)):
     stalls = get_stalls()
     fault_count = len([s for s in stalls if s["status"] == "fault"])
 
@@ -528,9 +554,8 @@ def toggle_maintenance_all():
         save_stalls(stalls)
         return {"action": "start", "message": "现在已全部进入维修状态"}
 
-
 @app.post("/admin/cleaning-all")
-def toggle_cleaning_all():
+def toggle_cleaning_all( admin: dict = Depends(require_admin)):
     stalls = get_stalls()
     cleaning_count = len([s for s in stalls if s["status"] == "cleaning"])
 
@@ -548,9 +573,8 @@ def toggle_cleaning_all():
         save_stalls(stalls)
         return {"action": "start", "message": "现在已全部进入清理状态"}
 
-
 @app.post("/admin/fault-done")
-def fault_done(stall_id: str):
+def fault_done(stall_id: str, admin: dict = Depends(require_admin)):
     stall = find_stall(stall_id)
     if stall is None:
         raise HTTPException(status_code=404, detail=f"隔间 {stall_id} 不存在")
@@ -560,9 +584,8 @@ def fault_done(stall_id: str):
     mark_feedback_done(stall_id)
     return {"stall_id": stall_id, "new_status": "idle", "message": "已取消维修"}
 
-
 @app.post("/admin/cleaning-done")
-def cleaning_done(stall_id: str):
+def cleaning_done(stall_id: str, admin: dict = Depends(require_admin)):
     stall = find_stall(stall_id)
     if stall is None:
         raise HTTPException(status_code=404, detail=f"隔间 {stall_id} 不存在")
@@ -571,29 +594,26 @@ def cleaning_done(stall_id: str):
     update_stall(stall_id, status="idle", used_seconds=0)
     mark_feedback_done(stall_id)
     return {"stall_id": stall_id, "new_status": "idle", "message": "已取消清理"}
-# ============================================================
-# 13. 仿真控制接口
-# ============================================================
 
+# ============================================================
+# 12. 仿真控制接口
+# ============================================================
 @app.post("/sim/start")
-async def sim_start():
+async def sim_start( admin: dict = Depends(require_admin)):
     simulator.start()
     return {"message": "仿真器已启动", "status": simulator.status()}
 
-
 @app.post("/sim/stop")
-def sim_stop():
+def sim_stop( admin: dict = Depends(require_admin)):
     simulator.stop()
     return {"message": "仿真器已停止", "status": simulator.status()}
 
-
 @app.get("/sim/status")
-def sim_status():
+def sim_status( admin: dict = Depends(require_admin)):
     return simulator.status()
 
-
 @app.post("/sim/trigger-peak")
-def trigger_peak():
+def trigger_peak( admin: dict = Depends(require_admin)):
     stalls = get_stalls()
     occupied = 0
     for s in stalls:
@@ -607,11 +627,10 @@ def trigger_peak():
     save_stalls(stalls)
     return {"message": "晚高峰已触发", "occupied": occupied}
 
-
 @app.post("/sim/reset")
-def sim_reset():
+def sim_reset( admin: dict = Depends(require_admin)):
     save_stalls(init_stalls())
-    save_queues({"female": []})
+    r.delete(QUEUE_KEY)  # 改造点：清空 Redis List 队列
     save_counter({"female": 0})
     save_feedbacks([])
     save_ticket_map({})

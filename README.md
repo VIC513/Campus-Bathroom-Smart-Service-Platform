@@ -1,3 +1,39 @@
+# 校园浴室智能调度平台 - 后端中台 (成员1)
+
+本项目为纯软件架构的“数字孪生”后端，基于 FastAPI 构建，实现了从数据仿真、状态缓存、排队调度到实时推送的完整闭环。
+
+## 🚀 核心技术栈
+- **Web 框架**：FastAPI (Python 3.10+)
+- **数据存储**：Redis (高速缓存与状态持久化)
+- **实时通信**：WebSocket (状态秒级推送)
+- **仿真引擎**：基于 66 份真实问卷分布的数据仿真器
+
+## 📦 核心功能模块
+1. **数据仿真器 (Simulator)**
+   - 依据问卷调研（女生均时 18.8 分钟，晚高峰 21:00-23:00），自动模拟隔间状态流转（空闲 -> 占用 -> 空闲）。
+   - 支持一键高峰、暂停/恢复。
+2. **核心 API (20+ 接口)**
+   - 用户端：查询隔间、获取建议、排队取号、取消排队、故障/清理报修。
+   - 管理端：反馈列表查询、一键统一维修/清理、单个处理。
+3. **Redis 缓存**
+   - 隔间状态、排队队列、报修反馈均落盘 Redis，服务器重启数据不丢失。
+4. **WebSocket 实时推送**
+   - 端点：`ws://127.0.0.1:8000/ws/stalls`，仿真器状态变化每 5 秒主动推送前端。
+
+## 🛠️ 本地运行指南
+1. 启动 Redis (Memurai)
+2. 安装依赖：`pip install fastapi uvicorn redis websockets`
+3. 启动后端：`python -m uvicorn main:app --reload`
+4. 访问 Swagger 文档：`http://127.0.0.1:8000/docs`
+
+## 📊 答辩/演示流程
+1. 调 `POST /sim/start` 启动仿真，观察隔间状态实时变化。
+2. 调 `POST /queue` 模拟用户排队取号。
+3. 运行 `test_ws.py` 展示 WebSocket 数据实时推送。
+4. 调 `POST /feedback/fault` 和 `GET /admin/feedback` 展示报修处理闭环。
+
+## 👨‍💻 负责人
+- 成员1 (后端 Lead & DevOps)
 
 本项目为纯软件架构的“数字孪生”后端，基于 Python FastAPI 构建。在无物理传感器硬件的限制下，通过自研的数据仿真引擎，实现了从状态生成、排队调度到实时推送的完整业务闭环。
 
@@ -55,3 +91,38 @@
 2. 终端运行：`python -m uvicorn main:app --reload`
 3. 浏览器打开 Swagger UI：`http://127.0.0.1:8000/docs`
 4. 终端运行：`python test_ws.py` (观察实时推送)。
+
+# 校园浴室智能调度系统 - 后端核心中台 (v2.0)
+**负责人**：成员1 (后端 Lead & DevOps)
+**项目架构**：Python FastAPI + Redis + WebSocket + JWT (纯软件数字孪生架构)
+
+本项目为无物理硬件支撑下的“纯软件数字孪生”中台。实现了从数据自动仿真、状态机流转、Redis 高并发排队、JWT 权限隔离到 WebSocket 秒级推送的完整业务闭环。
+
+---
+
+## 🚀 一、 核心技术亮点 (答辩重点)
+
+1. **数据驱动仿真 (Simulator)**：基于 66 份真实问卷构建的正态分布模型（均值 18.8 分钟，晚高峰 21:00-23:00 权重最高）。利用 `asyncio` 后台协程，每 5 秒自动 Tick 模拟隔间进出。
+2. **高并发排队 (Redis List)**：摒弃了传统的内存数组，采用 Redis 的 `rpush` (入队) 和 `lpop` (出队) 原子操作，保障 1000+ 并发下的 FIFO（先进先出）正确性与数据持久化。
+3. **实时通信 (WebSocket)**：建立 `ws://127.0.0.1:8000/ws/stalls` 全双工通道。仿真器状态一旦改变，后端主动向前端广播 `stalls_update` 数据包，免轮询，毫秒级更新。
+4. **安全防御 (JWT)**：实现了基于 Token 的鉴权系统，包含密码 SHA-256 哈希加密，以及 User / Admin 的双角色权限隔离（RBAC）。
+
+---
+
+## 🔗 二、 前后端联调指南（前端必看！）
+
+**1. 鉴权接入（核心改变）**
+所有面向用户（排队、报修）和管理端（一键清理/维修）的接口均受保护。
+- 注册接口：`POST /auth/register`
+- 登录接口：`POST /auth/login`（预置测试账号：`admin/admin123`，`user/user123`）
+*前端需在 Header 中携带：`Authorization: Bearer <access_token>`*
+
+**2. WebSocket 推送格式**
+```json
+{
+  "type": "stalls_update",
+  "data": [
+    {"stall_id": "F01", "status": "occupied", "used_seconds": 120},
+    ...
+  ]
+}
