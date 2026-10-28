@@ -169,10 +169,17 @@ onMounted(() => {
 
 <template>
   <div class="page">
-    <!-- 顶部问候 + 副标题 -->
+    <!-- 顶部问候 + 副标题 + 扫一扫入口 -->
     <div class="topbar">
-      <div class="hello">{{ greeting }}，同学</div>
-      <div class="sub">校园宿舍淋浴选位 · 单栋实时看板</div>
+      <div class="tb-left">
+        <div class="hello">{{ greeting }}，同学</div>
+        <div class="sub">校园宿舍淋浴选位 · 单栋实时看板</div>
+      </div>
+      <!-- 扫码使用：扫隔间二维码 → 一键预约/报修 -->
+      <button class="scan-entry" @click="router.push('/scan')">
+        <van-icon name="scan" />
+        <span>扫一扫</span>
+      </button>
     </div>
 
     <!-- 加载态 -->
@@ -302,7 +309,13 @@ onMounted(() => {
   margin: 0 auto;
 }
 .topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 14px;
+}
+.tb-left {
+  min-width: 0;
 }
 .hello {
   font-size: 28px;
@@ -313,6 +326,28 @@ onMounted(() => {
   font-size: 14px;
   color: var(--text-sub);
   margin-top: 4px;
+}
+/* 扫一扫入口按钮 */
+.scan-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--line);
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--text-sub);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.scan-entry .van-icon {
+  font-size: 20px;
+  color: var(--brand);
+}
+.scan-entry:active {
+  opacity: 0.7;
 }
 .loading {
   text-align: center;

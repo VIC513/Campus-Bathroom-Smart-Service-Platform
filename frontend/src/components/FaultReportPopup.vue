@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { showSuccessToast } from 'vant'
 import { FAULT_TYPES, FAULT_REASON_MAP } from '@/types'
 import type { FaultType, Stall, Bathzone } from '@/types'
@@ -10,6 +10,8 @@ const props = defineProps<{
   bathName: string
   /** 该楼的全部分区隔间 */
   zones: Bathzone[]
+  /** 预选隔间 id（扫码快速报修时传入，弹窗打开即默认选中该隔间） */
+  presetStallId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -34,6 +36,16 @@ const needDetail = computed(() => faultType.value === 'other')
 function onPick(stallId: number) {
   selectedId.value = stallId
 }
+
+/** 弹窗打开时：若有预选隔间（扫码快速报修），默认选中；维修中的隔间不可选则跳过 */
+watch(
+  () => props.show,
+  (v) => {
+    if (!v || props.presetStallId == null) return
+    const preset = allStalls.value.find((s) => s.id === props.presetStallId)
+    if (preset && preset.status !== 'fault') selectedId.value = preset.id
+  }
+)
 
 function onSubmit() {
   if (!faultType.value || selectedId.value == null) return

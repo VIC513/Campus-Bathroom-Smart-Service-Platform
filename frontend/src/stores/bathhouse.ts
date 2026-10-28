@@ -116,6 +116,28 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     protectStall(bathhouseId, s?.stallId ?? stallId)
   }
 
+  /**
+   * 扫码入场：把空闲隔间本地标记为「使用中」（传感器语义：门磁闭合=有人进入），
+   * 不产生排队票，仅联动 UI 状态，并加 5 秒仿真保护。
+   */
+  function startUseAt(bathhouseId: number, stallId: number | string) {
+    const b = bathhouses.value.find((x) => x.id === bathhouseId)
+    const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
+    if (s && s.status === 'idle') s.status = 'occupied'
+    protectStall(bathhouseId, s?.stallId ?? stallId)
+  }
+
+  /**
+   * 扫码离场：把使用中的隔间恢复为空闲（无故障时），并加仿真保护。
+   * 有故障的场景走 submitFault（提交报修 + 标记维修）。
+   */
+  function endUseAt(bathhouseId: number, stallId: number | string) {
+    const b = bathhouses.value.find((x) => x.id === bathhouseId)
+    const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
+    if (s) s.status = 'idle'
+    protectStall(bathhouseId, s?.stallId ?? stallId)
+  }
+
   /** 每日用水高峰数据 */
   const waterUsage = ref<WaterPoint[]>([])
   async function fetchWaterUsage() {
@@ -140,6 +162,8 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     fetchForecast,
     fetchWaterUsage,
     submitFault,
+    startUseAt,
+    endUseAt,
     countStalls,
   }
 })

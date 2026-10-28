@@ -10,6 +10,7 @@ import type {
   RecommendDto,
   Stall,
   StallDto,
+  StallStatus,
   WaitForecast,
   WaterPoint,
 } from '@/types'
@@ -22,6 +23,10 @@ import {
   mockGetForecast,
   mockGetWaterUsage,
   markStallMaintenance,
+  mockAddFaultFeedback,
+  mockGetAdminOverview,
+  mockFaultDone,
+  mockToggleMaintenanceAll,
 } from '@/mock/data'
 
 /**
@@ -236,16 +241,29 @@ export async function cancelTicket(id: string): Promise<boolean> {
   )
 }
 
-/** 报修：真实 POST /api/feedback/fault；失败回退为本地 mock 标记为故障 */
+/**
+ * 报修：真实 POST /api/feedback/fault；失败回退为本地 mock 标记为故障。
+ * 无论真实还是 mock，都同步在本地写一条报修记录，保证管理后台离线时也有工单可看。
+ */
 export async function reportFault(
   bathhouseId: number,
   stallId: number | string,
   type: FaultType,
   detail = ''
 ) {
+  // 本地标记故障 + 写入 mock 工单（真实请求成功时后端自己会记录，无需写）
+  const markLocally = () => {
+    markStallMaintenance(bathhouseId, stallId)
+    mockAddFaultFeedback(
+      String(stallId),
+      FAULT_REASON_MAP[type],
+      detail?.trim() || (type === 'other' ? FAULT_REASON_MAP.other : '同学报修'),
+      currentUserId
+    )
+  }
   // 非真实楼栋不请求后端，直接在本地把隔间标记为故障
   if (!isRealBuilding(bathhouseId)) {
-    markStallMaintenance(bathhouseId, stallId)
+    markLocally()
     return Promise.resolve({ ok: true, stallId, type })
   }
   return safeFetch(
@@ -261,7 +279,7 @@ export async function reportFault(
       return { ok: true, stallId, type, message: res.message }
     },
     () => {
-      markStallMaintenance(bathhouseId, stallId)
+      markLocally()
       return Promise.resolve({ ok: true, stallId, type })
     }
   )
@@ -304,4 +322,90 @@ export async function getRecommend(fromId: number): Promise<Recommend> {
  */
 export function getWaterUsage(): Promise<WaterPoint[]> {
   return mockGetWaterUsage()
+}
+
+/* ================= 管理后台 ================= */
+
+/** 管理后台的一条报修工单（由后端 snake_case 适配而来） */
+export interface AdminFeedback {
+  stallId: string
+  reason: string
+  detail: string
+  userId: string
+  /** 时间戳（ms） */
+  time: number
+  status: 'pending' | 'done'
+}
+
+/** 管理后台总览：隔间状态快照 + 报修工单 */
+export interface AdminOverview {
+  stalls: { stallId: string; status: StallStatus }[]
+  feedbacks: AdminFeedback[]
+}
+
+/** 后端 /admin/feedback 原始结构 */
+interface AdminFeedbackDto {
+  type: string
+  stall_id: string
+  reason: string
+  detail?: string
+  user_id: string
+  time: string
+  status: string
+}
+
+/**
+ * 拉取管理后台总览（单楼）。
+ * 真实：GET /stalls + GET /admin/feedback（仅取 type=fault 的报修）；
+ * 失败：回退本地 mock（种子隔间状态 + localStorage 工单）。
+ */
+export async function getAdminOverview(): Promise<AdminOverview> {
+  return safeFetch(
+    async () => {
+      const stalls = (await http.get('/stalls')) as StallDto[]
+      const raw = (await http.get('/admin/feedback')) as AdminFeedbackDto[]
+      return {
+        stalls: stalls.map((s) => ({ stallId: s.stall_id, status: s.status })),
+        feedbacks: raw
+          .filter((f) => f.type === 'fault')
+          .map((f) => ({
+            stallId: f.stall_id,
+            reason: f.reason,
+            detail: f.detail || '',
+            userId: f.user_id,
+            time: new Date(f.time).getTime() || Date.now(),
+            status: f.status === 'done' ? 'done' : ('pending' as const),
+          })),
+      }
+    },
+    async () => mockGetAdminOverview()
+  )
+}
+
+/** 完成某隔间维修：真实 POST /admin/fault-done?stall_id=；失败回退本地 mock */
+export async function adminFaultDone(stallId: string): Promise<boolean> {
+  return safeFetch(
+    async () => {
+      await http.post(`/admin/fault-done?stall_id=${encodeURIComponent(stallId)}`)
+      return true
+    },
+    () => {
+      mockFaultDone(stallId)
+      return Promise.resolve(true)
+    }
+  )
+}
+
+/**
+ * 一键切换全部维修：
+ * 真实 POST /admin/maintenance-all（返回 action: start|end）；失败回退本地 mock。
+ */
+export async function adminToggleMaintenanceAll(): Promise<'start' | 'end'> {
+  return safeFetch(
+    async () => {
+      const res = (await http.post('/admin/maintenance-all')) as { action?: string }
+      return res.action === 'end' ? 'end' : 'start'
+    },
+    () => Promise.resolve(mockToggleMaintenanceAll())
+  )
 }

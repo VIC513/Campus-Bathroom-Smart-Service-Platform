@@ -143,6 +143,108 @@ export function markStallMaintenance(bathhouseId: number, stallId: number | stri
   if (s) s.status = 'fault'
 }
 
+/* ================= 管理后台（Mock 数据） ================= */
+
+/** Mock 模式下的报修记录（结构与后端 /admin/feedback 对齐） */
+export interface MockFeedback {
+  stallId: string
+  reason: string
+  detail: string
+  userId: string
+  /** 时间戳（ms） */
+  time: number
+  status: 'pending' | 'done'
+}
+
+const MOCK_FEEDBACK_KEY = 'bath_admin_feedback'
+
+/** 读取 mock 报修记录（解析失败时返回空数组，避免后台页崩溃） */
+export function mockLoadFeedback(): MockFeedback[] {
+  try {
+    return JSON.parse(localStorage.getItem(MOCK_FEEDBACK_KEY) || '[]') as MockFeedback[]
+  } catch {
+    return []
+  }
+}
+
+function saveMockFeedback(list: MockFeedback[]) {
+  localStorage.setItem(MOCK_FEEDBACK_KEY, JSON.stringify(list))
+}
+
+/**
+ * 报修时写入一条 mock 记录。
+ * 同一隔间若已有未处理记录则覆盖（更新原因/时间），避免重复工单堆积。
+ */
+export function mockAddFaultFeedback(
+  stallId: string,
+  reason: string,
+  detail: string,
+  userId = 'student001'
+) {
+  const list = mockLoadFeedback()
+  const exist = list.find((f) => f.stallId === stallId && f.status === 'pending')
+  if (exist) {
+    exist.reason = reason
+    exist.detail = detail
+    exist.time = Date.now()
+  } else {
+    list.unshift({ stallId, reason, detail, userId, time: Date.now(), status: 'pending' })
+  }
+  saveMockFeedback(list)
+}
+
+/** 完成某隔间维修：隔间恢复空闲，对应待处理工单标记完成 */
+export function mockFaultDone(stallId: string) {
+  const b = bathhouses.find((x) => x.id === 1)
+  const s = b?.stalls.find((x) => x.stallId === stallId)
+  if (s && s.status === 'fault') s.status = 'idle'
+
+  const list = mockLoadFeedback()
+  let changed = false
+  list.forEach((f) => {
+    if (f.stallId === stallId && f.status === 'pending') {
+      f.status = 'done'
+      changed = true
+    }
+  })
+  if (changed) saveMockFeedback(list)
+}
+
+/**
+ * 一键切换全部维修：
+ * 未处于「全部维修」→ 全部置为维修；已是全部维修 → 全部恢复空闲并关闭所有工单。
+ * @returns 'start' 已进入维修 / 'end' 已全部完成维修
+ */
+export function mockToggleMaintenanceAll(): 'start' | 'end' {
+  const b = bathhouses.find((x) => x.id === 1)
+  if (!b) return 'end'
+  const allFault = b.stalls.every((s) => s.status === 'fault')
+  b.stalls.forEach((s) => {
+    s.status = allFault ? 'idle' : 'fault'
+  })
+  if (allFault) {
+    const list = mockLoadFeedback()
+    let changed = false
+    list.forEach((f) => {
+      if (f.status === 'pending') {
+        f.status = 'done'
+        changed = true
+      }
+    })
+    if (changed) saveMockFeedback(list)
+  }
+  return allFault ? 'end' : 'start'
+}
+
+/** 管理后台总览（单楼 1 号楼）：隔间状态快照 + 报修记录 */
+export function mockGetAdminOverview() {
+  const b = bathhouses.find((x) => x.id === 1)!
+  return {
+    stalls: b.stalls.map((s) => ({ stallId: s.stallId, status: s.status })),
+    feedbacks: mockLoadFeedback(),
+  }
+}
+
 /* ================= Mock API ================= */
 
 export async function mockGetBathhouses(): Promise<Bathhouse[]> {

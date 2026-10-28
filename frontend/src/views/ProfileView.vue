@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { showToast, showDialog, showConfirmDialog } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { useUserStore } from '@/stores/user'
+import { loadFrequent } from '@/utils/bathHistory'
 
 const store = useBathhouseStore()
 const userStore = useUserStore()
@@ -18,38 +19,51 @@ const avatarChar = computed(() => nickname.value.charAt(0))
 const todayCount = computed(() => store.myTickets.length)
 const savedMinutes = computed(() => store.myTickets.reduce((sum, t) => sum + t.waitMinutes, 0))
 
-/** 常去浴室：按预约的隔间统计（同一隔间多次预约累计次数），显示预约的具体隔间号如「F12（N 次）」；新增预约后实时变化 */
+/** 常去浴室：取号预约 + 扫码使用 合并统计（同一隔间多次累计），显示隔间号如「F12（N 次）」 */
 const frequentList = computed(() => {
-  const map = new Map<string, { no: string; count: number; last: number }>()
+  const map = new Map<string, { no: string; bathName: string; count: number; last: number }>()
+  // 1) 取号预约记录
   for (const t of store.myTickets) {
     if (t.status === 'canceled') continue // 已取消的号不计入常去
-    // 显示预约的具体隔间号（预约 F12 就显示 F12）
     const no = t.assignedStall || t.code || `#${t.bathhouseId}`
     const cur = map.get(no)
     if (cur) {
       cur.count++
       cur.last = Math.max(cur.last, t.createdAt)
     } else {
-      map.set(no, { no, count: 1, last: t.createdAt })
+      map.set(no, { no, bathName: '', count: 1, last: t.createdAt })
+    }
+  }
+  // 2) 扫码使用记录（扫码入场即累计）
+  for (const f of loadFrequent(account.value)) {
+    const cur = map.get(f.no)
+    if (cur) {
+      cur.count += f.count
+      cur.last = Math.max(cur.last, f.last)
+      if (!cur.bathName && f.bathName) cur.bathName = f.bathName
+    } else {
+      map.set(f.no, { no: f.no, bathName: f.bathName, count: f.count, last: f.last })
     }
   }
   return [...map.values()].sort((a, b) => b.last - a.last)
 })
 
-/** 常去浴室数字：累计预约总次数（每次新增预约 +1） */
+/** 常去浴室数字：取号预约 + 扫码使用 总次数 */
 const frequentCount = computed(
-  () => store.myTickets.filter((t) => t.status !== 'canceled').length,
+  () =>
+    store.myTickets.filter((t) => t.status !== 'canceled').length +
+    loadFrequent(account.value).reduce((sum, f) => sum + f.count, 0),
 )
 
-/** 点击「常去浴室」：无记录时提示，有记录时弹出常去浴室列表（含累计次数） */
+/** 点击「常去浴室」：无记录时提示，有记录时弹出常去浴室列表（含浴室名与累计次数） */
 async function onFrequentTap() {
   if (!frequentList.value.length) {
-    showToast('还没有取号记录，取号后这里自动统计')
+    showToast('还没有取号/扫码使用记录，去体验一下吧')
     return
   }
   await showDialog({
     title: '常去浴室号',
-    message: frequentList.value.map((n) => `· ${n.no}（${n.count} 次）`).join('\n'),
+    message: frequentList.value.map((n) => `· ${n.bathName}${n.bathName ? ' ' : ''}${n.no}（${n.count} 次）`).join('\n'),
     confirmButtonText: '知道了',
   })
 }
@@ -100,7 +114,10 @@ async function onLogout() {
 
     <!-- 功能入口 -->
     <van-cell-group inset :style="{ marginTop: '12px', background: 'transparent' }">
+      <van-cell title="扫码使用" label="扫隔间二维码 · 一键预约 / 快速报修" icon="scan" is-link to="/scan" />
+      <van-cell title="我的洗澡报告" label="查看每次洗浴记录与习惯分析" icon="notes-o" is-link to="/bath-reports" />
       <van-cell title="数据大盘看板" icon="bar-chart-o" is-link to="/dashboard" />
+      <van-cell title="管理后台" label="维修工单处理与批量维修开关" icon="setting-o" is-link to="/admin" />
       <van-cell title="我的排队记录" icon="orders-o" is-link to="/queue" />
       <van-cell title="智能分流推荐" label="回首页查看实时等位建议与预测曲线" icon="guide-o" is-link to="/" />
       <van-cell title="使用帮助" icon="question-o" is-link />
@@ -108,8 +125,6 @@ async function onLogout() {
       <!-- 退出登录：样式与其他功能入口保持一致，仅图标不同（power-o 在该字体子集缺失，用 user-o） -->
       <van-cell title="退出登录" icon="user-o" is-link @click="onLogout" />
     </van-cell-group>
-
-    <div class="footer">浴室智洗 BathSight · 无侵入物联网 · 数字孪生式状态感知</div>
   </div>
 </template>
 
@@ -173,11 +188,5 @@ async function onLogout() {
 .stat span {
   font-size: 11px;
   color: var(--text-sub);
-}
-.footer {
-  text-align: center;
-  color: var(--text-sub);
-  font-size: 11px;
-  margin-top: 40px;
 }
 </style>

@@ -35,6 +35,24 @@ const router = createRouter({
       component: () => import('@/views/DashboardView.vue'),
     },
     {
+      path: '/scan',
+      name: 'scan',
+      // 扫码使用：扫隔间二维码 → 一键预约 / 快速报修
+      component: () => import('@/views/ScanView.vue'),
+    },
+    {
+      path: '/bath-reports',
+      name: 'bath-reports',
+      // 我的洗澡报告：扫码使用完成后的历史记录与习惯分析
+      component: () => import('@/views/BathReportsView.vue'),
+    },
+    {
+      path: '/admin',
+      name: 'admin',
+      // 管理后台：维修工单处理 + 批量维修开关
+      component: () => import('@/views/AdminView.vue'),
+    },
+    {
       path: '/profile',
       name: 'profile',
       // 个人中心：排队历史
