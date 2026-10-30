@@ -7,8 +7,10 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
+import asyncio
+import os
 import redis
 import json
 import jwt
@@ -27,8 +29,11 @@ app = FastAPI(
     version="4.0.0"
 )
 
-SECRET_KEY = "campus_bathroom_secret_key_2026"
+# #9：JWT 密钥从环境变量读取，避免硬编码；未设置时使用内置值（仅限演示/开发）
+SECRET_KEY = os.environ.get("BATH_JWT_SECRET", "campus_bathroom_secret_key_2026_demo")
 ALGORITHM = "HS256"
+# Token 有效期：7 天（演示期较长，避免频繁登录打断体验）
+TOKEN_EXPIRE_HOURS = 24 * 7
 security = HTTPBearer(auto_error=False)
 class AuthModel(BaseModel):
     username: str
@@ -39,8 +44,11 @@ def get_hash(pwd: str) -> str: return hashlib.sha256(pwd.encode()).hexdigest()
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials: return None
     try:
+        # 开启 exp 校验，过期 token 会抛 ExpiredSignatureError
         return jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-    except:
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+    except Exception:
         raise HTTPException(status_code=401, detail="无效或过期的凭证")
 
 def require_user(user: dict = Depends(get_current_user)):
@@ -48,14 +56,22 @@ def require_user(user: dict = Depends(get_current_user)):
     return user
 
 def require_admin(user: dict = Depends(get_current_user)):
-    if user is None or user.get("role") != "admin":
+    if user is None: raise HTTPException(status_code=401, detail="请先登录")
+    if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="权限不足，需要管理员身份")
     return user
 
 # ============================================================
 # 2. Redis 连接与 Key 定义
 # ============================================================
-r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+r = redis.Redis(
+    host="localhost",
+    port=6379,
+    decode_responses=True,
+    # Memurai 等兼容实现不支持 RESP3 的 HELLO 命令，显式使用 RESP2 避免启动报
+    # "unknown command `HELLO`"
+    protocol=2,
+)
 QUEUE_KEY = "queue:female"  # 使用 Redis List 存排队队列
 
 # ============================================================
@@ -105,7 +121,10 @@ class Stall(BaseModel):
     used_seconds: int = 0
 
 class QueueRequest(BaseModel):
-    user_id: str
+    # user_id 仅为兼容旧客户端保留，真实身份以 token.sub 为准（见 #8）
+    user_id: Optional[str] = None
+    # 可选：指定要预约的隔间（详情页点选空闲隔间时传入）
+    stall_id: Optional[str] = None
 
 class QueueResponse(BaseModel):
     ticket_id: str
@@ -117,7 +136,8 @@ class FeedbackRequest(BaseModel):
     stall_id: str
     reason: str
     detail: Optional[str] = ""
-    user_id: str
+    # user_id 仅为兼容旧客户端保留，真实身份以 token.sub 为准（见 #8）
+    user_id: Optional[str] = None
 
 # ============================================================
 # 6. Redis 数据操作工具
@@ -128,6 +148,20 @@ def init_stalls() -> List[dict]:
         for i in range(1, 16)
     ]
 
+def seed_users():
+    """预置演示账号（与 README 对齐）：admin/admin123 管理员、user/user123 普通用户"""
+    presets = [
+        ("admin", "admin123", "admin"),
+        ("user", "user123", "user"),
+    ]
+    for username, password, role in presets:
+        if not r.exists(f"user:{username}"):
+            r.set(
+                f"user:{username}",
+                json.dumps({"username": username, "password": get_hash(password), "role": role}),
+            )
+
+
 def redis_init():
     if not r.exists("stalls"):
         r.set("stalls", json.dumps(init_stalls()))
@@ -137,6 +171,7 @@ def redis_init():
         r.set("ticket_counter", json.dumps({"female": 0}))
     if not r.exists("ticket_to_stall"):
         r.set("ticket_to_stall", json.dumps({}))
+    seed_users()
     print("[Redis] 初始化完成")
 
 def get_stalls() -> List[dict]:
@@ -208,7 +243,18 @@ def mark_all_feedback_done(feedback_type: str):
 # ============================================================
 @app.on_event("startup")
 async def startup_event():
-    redis_init()
+    # Redis 未启动时最多重试 5 次（每次间隔 1 秒），仍失败则给出明确的中文提示，
+    # 而不是抛出难以理解的连接栈
+    for attempt in range(1, 6):
+        try:
+            redis_init()
+            break
+        except redis.exceptions.RedisError as e:
+            print(f"[启动] Redis 连接失败（第 {attempt}/5 次）：{e}")
+            if attempt == 5:
+                raise RuntimeError("无法连接 Redis，请先启动 Memurai（localhost:6379）后再启动后端")
+            await asyncio.sleep(1)
+
     simulator.attach_redis(r)
 
     async def on_update(stalls):
@@ -230,20 +276,25 @@ async def websocket_stalls(websocket: WebSocket):
 # ============================================================
 # 9. GET 接口
 # ============================================================
-@app.post("/auth/registert")
+@app.post("/auth/register")
 def register(data: AuthModel):
+    # 注册只允许普通用户，忽略客户端传入的 role，避免自助提权为 admin
     if r.exists(f"user:{data.username}"): raise HTTPException(400, "用户名已存在")
-    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": data.role}))
+    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": "user"}))
     return {"message": "注册成功"}
 
 @app.post("/auth/login")
 def login(data: AuthModel):
     user_raw = r.get(f"user:{data.username}")
-    if not user_raw: raise HTTPException(400, "账号或密码错误")
+    if not user_raw: raise HTTPException(400, "账号未注册，请先注册")
     user_info = json.loads(user_raw)
     if user_info["password"] != get_hash(data.password): raise HTTPException(400, "账号或密码错误")
     
-    token = jwt.encode({"sub": data.username, "role": user_info["role"]}, SECRET_KEY, algorithm=ALGORITHM)
+    token = jwt.encode(
+        {"sub": data.username, "role": user_info["role"], "exp": datetime.now() + timedelta(hours=TOKEN_EXPIRE_HOURS)},
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
     return {"access_token": token, "role": user_info["role"], "username": data.username}
 
 
@@ -406,7 +457,8 @@ def get_my_ticket(user: dict = Depends(require_user)):
         return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}
 
 @app.get("/admin/feedback")
-def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None):
+def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    # #7：补管理员鉴权，未登录/普通用户无法读取工单列表
     result = get_feedbacks()
     if type:
         result = [f for f in result if f["type"] == type]
@@ -415,7 +467,8 @@ def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None)
     return result
 
 @app.get("/admin/pending")
-def admin_pending():
+def admin_pending(admin: dict = Depends(require_admin)):
+    # #7：补管理员鉴权
     stalls = get_stalls()
     feedbacks = get_feedbacks()
     return {
@@ -429,17 +482,35 @@ def admin_pending():
 # ============================================================
 @app.post("/queue", response_model=QueueResponse)
 def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
+    # #8：真实身份统一以 token.sub 为准，忽略客户端传入的 user_id，防止伪造
+    username = user.get("sub")
+
     counter = get_counter()
     counter["female"] += 1
     ticket_id = f"F{counter['female']:04d}"
     save_counter(counter)
-    # 把这行加上，绑定用户和票号（有效期一天）
-    username = user.get("sub")
-    r.set(f"user:{req.user_id}:ticket", ticket_id, ex=86400) 
+    # 绑定用户和票号（有效期一天），key 用 token 中的用户名
+    r.set(f"user:{username}:ticket", ticket_id, ex=86400)
+
     stalls = get_stalls()
     idle_stalls = [s for s in stalls if s["status"] == "idle"]
-    if idle_stalls:
+
+    # #6：如果客户端指定了隔间，校验可用性后精确分配；否则分配第一个空闲隔间
+    if req.stall_id:
+        target = find_stall(req.stall_id)
+        if target is None:
+            r.delete(f"user:{username}:ticket")
+            raise HTTPException(status_code=400, detail=f"隔间 {req.stall_id} 不存在")
+        if target["status"] != "idle":
+            r.delete(f"user:{username}:ticket")
+            raise HTTPException(status_code=400, detail=f"隔间 {req.stall_id} 当前不可用")
+        stall = target
+    elif idle_stalls:
         stall = idle_stalls[0]
+    else:
+        stall = None
+
+    if stall is not None:
         stall["status"] = "occupied"
         stall["used_seconds"] = 0
         save_stalls(stalls)
@@ -455,7 +526,7 @@ def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
             stall_id=stall["stall_id"]
         )
 
-    # 改造点：入队用 Redis List
+    # 没有空闲隔间：入队 Redis List
     r.rpush(QUEUE_KEY, ticket_id)
     position = r.llen(QUEUE_KEY)
     return QueueResponse(
@@ -502,7 +573,8 @@ def submit_fault(req: FeedbackRequest, user: dict = Depends(require_user)):
         "stall_id": req.stall_id,
         "reason": req.reason,
         "detail": req.detail,
-        "user_id": req.user_id,
+        # #8：身份以 token.sub 为准，忽略客户端 user_id
+        "user_id": user.get("sub"),
         "time": datetime.now().isoformat(),
         "status": "pending"
     })
@@ -525,7 +597,8 @@ def submit_cleaning(req: FeedbackRequest, user: dict = Depends(require_user)):
         "stall_id": req.stall_id,
         "reason": req.reason,
         "detail": req.detail,
-        "user_id": req.user_id,
+        # #8：身份以 token.sub 为准，忽略客户端 user_id
+        "user_id": user.get("sub"),
         "time": datetime.now().isoformat(),
         "status": "pending"
     })

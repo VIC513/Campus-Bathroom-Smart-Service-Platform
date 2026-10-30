@@ -133,6 +133,53 @@ function makeAllBathhouses(): Bathhouse[] {
 /** 浴室种子数据：31 栋宿舍楼 */
 export const bathhouses: Bathhouse[] = makeAllBathhouses()
 
+/* ================= 隔间状态本地持久化 ================= */
+
+/**
+ * 隔间状态本地持久化。
+ * mock 种子的状态是随机生成的，每次刷新都会重新随机；而报修工单保存在 localStorage 中，
+ * 会造成「后台有待处理工单，但对应隔间已不再显示为维修」的不一致。
+ * 这里在状态变更后写入 localStorage，页面加载时优先恢复，保证前后台语义一致。
+ */
+const STATUS_KEY = 'bath_mock_status'
+
+/** 读取已持久化的状态表（key 为 `楼栋id:隔间号`） */
+function loadStatusMap(): Record<string, StallStatus> {
+  try {
+    return JSON.parse(localStorage.getItem(STATUS_KEY) || '{}') as Record<string, StallStatus>
+  } catch {
+    return {}
+  }
+}
+
+/** 把持久化状态覆盖到随机种子（模块加载时执行一次） */
+function applySavedStatuses() {
+  const map = loadStatusMap()
+  bathhouses.forEach((b) =>
+    b.stalls.forEach((s) => {
+      const saved = map[`${b.id}:${s.stallId}`]
+      if (saved) s.status = saved
+    })
+  )
+}
+
+/** 保存当前种子状态（任何状态变更后调用） */
+export function persistStatuses() {
+  const map: Record<string, StallStatus> = {}
+  bathhouses.forEach((b) =>
+    b.stalls.forEach((s) => {
+      map[`${b.id}:${s.stallId}`] = s.status
+    })
+  )
+  try {
+    localStorage.setItem(STATUS_KEY, JSON.stringify(map))
+  } catch {
+    // 存储不可用时静默失败：只影响刷新后的状态保持，不影响当前会话
+  }
+}
+
+applySavedStatuses()
+
 /** 模拟网络延迟 */
 const delay = (ms = 300) => new Promise((r) => setTimeout(r, ms))
 
@@ -140,7 +187,10 @@ const delay = (ms = 300) => new Promise((r) => setTimeout(r, ms))
 export function markStallMaintenance(bathhouseId: number, stallId: number | string) {
   const b = bathhouses.find((x) => x.id === bathhouseId)
   const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
-  if (s) s.status = 'fault'
+  if (s) {
+    s.status = 'fault'
+    persistStatuses()
+  }
 }
 
 /* ================= 管理后台（Mock 数据） ================= */
@@ -197,7 +247,10 @@ export function mockAddFaultFeedback(
 export function mockFaultDone(stallId: string) {
   const b = bathhouses.find((x) => x.id === 1)
   const s = b?.stalls.find((x) => x.stallId === stallId)
-  if (s && s.status === 'fault') s.status = 'idle'
+  if (s && s.status === 'fault') {
+    s.status = 'idle'
+    persistStatuses()
+  }
 
   const list = mockLoadFeedback()
   let changed = false
@@ -222,6 +275,7 @@ export function mockToggleMaintenanceAll(): 'start' | 'end' {
   b.stalls.forEach((s) => {
     s.status = allFault ? 'idle' : 'fault'
   })
+  persistStatuses()
   if (allFault) {
     const list = mockLoadFeedback()
     let changed = false
@@ -272,6 +326,7 @@ export async function mockTakeTicket(bathhouseId: number): Promise<QueueTicket> 
     // 有空位 → 随机拿一个空闲隔间直接分配
     const stall = open[Math.floor(Math.random() * open.length)]
     stall.status = 'occupied'
+    persistStatuses()
     return {
       id: `t${Date.now()}`,
       code: stall.stallId,
@@ -313,6 +368,7 @@ export async function mockReserveStall(
   if (!s) throw new Error('隔间不存在')
   if (s.status !== 'idle') throw new Error('该隔间不可选')
   s.status = 'occupied'
+  persistStatuses()
   return {
     id: `t${Date.now()}`,
     code: s.stallId,

@@ -117,7 +117,6 @@ async function onLogout() {
       <van-cell title="扫码使用" label="扫隔间二维码 · 一键预约 / 快速报修" icon="scan" is-link to="/scan" />
       <van-cell title="我的洗澡报告" label="查看每次洗浴记录与习惯分析" icon="notes-o" is-link to="/bath-reports" />
       <van-cell title="数据大盘看板" icon="bar-chart-o" is-link to="/dashboard" />
-      <van-cell title="管理后台" label="维修工单处理与批量维修开关" icon="setting-o" is-link to="/admin" />
       <van-cell title="我的排队记录" icon="orders-o" is-link to="/queue" />
       <van-cell title="智能分流推荐" label="回首页查看实时等位建议与预测曲线" icon="guide-o" is-link to="/" />
       <van-cell title="使用帮助" icon="question-o" is-link />

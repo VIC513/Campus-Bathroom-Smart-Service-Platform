@@ -112,7 +112,7 @@ async function submit() {
   formError.value = ''
   const accountVal = account.value.trim()
   if (mode.value === 'login') {
-    const result = store.login(accountVal, password.value)
+    const result = await store.login(accountVal, password.value)
     if (result) {
       formError.value = result
       // 账号未注册：自动切到注册 tab 预填账号密码，补个验证码即可继续
@@ -128,7 +128,7 @@ async function submit() {
     router.replace(redirect)
   } else {
     // 注册：成功不自动登录，回登录 tab 预填账号
-    const result = store.register(accountVal, password.value, nickname.value.trim())
+    const result = await store.register(accountVal, password.value, nickname.value.trim())
     if (result) {
       formError.value = result
       if (result.includes('验证码')) genCode()
@@ -228,7 +228,10 @@ watch(mode, (m) => {
       </div>
     </div>
 
-    <div class="foot">仅用于课程演示，账号数据保存在本机</div>
+    <div class="foot">
+      <div>仅用于课程演示，账号数据保存在本机</div>
+      <button class="admin-entry" @click="router.push('/admin/login')">管理员登录入口 →</button>
+    </div>
   </div>
 </template>
 
@@ -376,6 +379,18 @@ watch(mode, (m) => {
   text-align: center;
   font-size: 11px;
   color: var(--text-sub);
+  opacity: 0.7;
+}
+/* 管理员入口：与普通用户登录区分开的独立入口 */
+.admin-entry {
+  margin-top: 10px;
+  border: none;
+  background: transparent;
+  color: var(--repair);
+  font-size: 12px;
+  cursor: pointer;
+}
+.admin-entry:active {
   opacity: 0.7;
 }
 </style>

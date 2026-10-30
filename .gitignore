@@ -14,3 +14,10 @@ dist-ssr/
 
 # 本机会话数据（登录演示账号存于浏览器 localStorage，不入库）
 *.zip
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# Office 临时锁文件
+~$*

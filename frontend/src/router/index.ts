@@ -47,9 +47,15 @@ const router = createRouter({
       component: () => import('@/views/BathReportsView.vue'),
     },
     {
+      path: '/admin/login',
+      name: 'admin-login',
+      // 管理员登录：独立入口，仅校验预置管理员账号（admin/admin123）
+      component: () => import('@/views/AdminLoginView.vue'),
+    },
+    {
       path: '/admin',
       name: 'admin',
-      // 管理后台：维修工单处理 + 批量维修开关
+      // 管理后台：维修工单处理 + 批量维修开关（仅管理员可进）
       component: () => import('@/views/AdminView.vue'),
     },
     {
@@ -61,14 +67,31 @@ const router = createRouter({
   ],
 })
 
-// 全局登录守卫：除 /login 外，未登录一律跳转登录页（带回跳地址）
+/**
+ * 全局路由守卫：
+ * 1. /admin/login（管理员登录页）：仅管理员会话会自动跳回后台，其他人可访问
+ * 2. /admin*（管理后台）：没有管理员身份一律跳管理员登录页（普通用户账号无效）
+ * 3. C 端页面：未登录跳 /login；管理员会话不允许进入 C 端，统一回后台
+ */
 router.beforeEach((to) => {
   const user = useUserStore()
-  if (to.path !== '/login' && !user.isLoggedIn) {
+
+  if (to.path === '/admin/login') {
+    return user.isAdmin ? '/admin' : true
+  }
+  if (to.path.startsWith('/admin')) {
+    if (!user.isAdmin) {
+      return { path: '/admin/login', query: { redirect: to.fullPath } }
+    }
+    return true
+  }
+  // C 端页面
+  if (!user.isLoggedIn) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
-  // 已登录访问登录页 → 直接回首页
-  if (to.path === '/login' && user.isLoggedIn) return '/'
+  // 管理员会话不进 C 端（普通用户访问登录页则回首页）
+  if (user.isAdmin) return '/admin'
+  if (to.path === '/login') return '/'
 })
 
 export default router

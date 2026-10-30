@@ -1,16 +1,26 @@
-﻿<script setup lang="ts">
+﻿﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { showConfirmDialog, showSuccessToast, showToast } from 'vant'
 import { getAdminOverview, adminFaultDone, adminToggleMaintenanceAll } from '@/api'
 import type { AdminOverview } from '@/api'
 import { useBathhouseStore } from '@/stores/bathhouse'
+import { useUserStore } from '@/stores/user'
 
 /**
- * 管理后台：维修工单处理 + 批量维修开关。
+ * 管理后台（仅管理员会话可访问）：维修工单处理 + 批量维修开关。
  * 真实接口优先（/admin/feedback、/admin/fault-done、/admin/maintenance-all），
  * 后端离线时由 api 层自动回退本地 mock，保证演示可用。
  */
 const store = useBathhouseStore()
+const userStore = useUserStore()
+const router = useRouter()
+
+/** 当前管理员展示名（昵称 + 账号） */
+const adminLabel = computed(() => {
+  const u = userStore.current
+  return u ? `${u.nickname || '管理员'} · ${u.account}` : ''
+})
 
 const overview = ref<AdminOverview | null>(null)
 const loading = ref(true)
@@ -103,6 +113,22 @@ async function onToggleAll() {
   }
 }
 
+/** 退出管理员登录：二次确认后清除会话并回到管理员登录页 */
+async function onLogout() {
+  try {
+    await showConfirmDialog({
+      title: '退出管理后台',
+      message: '确定要退出当前管理员账号吗？',
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return // 取消
+  }
+  userStore.logout()
+  router.replace('/admin/login')
+}
+
 /** 手动刷新 */
 async function onRefresh() {
   loading.value = true
@@ -123,6 +149,13 @@ onMounted(reload)
       <button class="refresh-btn" :disabled="loading" @click="onRefresh">
         <van-icon name="replay" />
       </button>
+    </div>
+
+    <!-- 当前管理员信息 + 退出（管理员账号与 C 端账号完全隔离） -->
+    <div class="admin-bar">
+      <span class="badge">管理员</span>
+      <span class="admin-name">{{ adminLabel }}</span>
+      <button class="logout-btn" @click="onLogout">退出</button>
     </div>
 
     <!-- 状态统计 -->
@@ -229,6 +262,49 @@ onMounted(reload)
   color: var(--text-sub);
   font-size: 16px;
   cursor: pointer;
+}
+/* 管理员信息条 */
+.admin-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--repair);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--repair);
+  background: rgba(125, 92, 240, 0.12);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.admin-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.logout-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  background: var(--bg-page);
+  color: var(--text-sub);
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.logout-btn:active {
+  opacity: 0.7;
 }
 /* 三格状态统计 */
 .stats {
