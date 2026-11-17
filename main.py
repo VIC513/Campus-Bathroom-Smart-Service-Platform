@@ -12,6 +12,8 @@ import random
 import redis
 import time
 import json
+import os
+import secrets
 import jwt
 import hashlib
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -28,8 +30,13 @@ app = FastAPI(
     version="4.0.0"
 )
 
-SECRET_KEY = "campus_bathroom_secret_key_2026"
+# JWT 密钥优先取环境变量；未配置时随机生成（进程重启后旧 Token 失效）
+SECRET_KEY = os.getenv("JWT_SECRET") or secrets.token_urlsafe(48)
 ALGORITHM = "HS256"
+
+# 管理员初始账号：仅用于本地演示，部署时务必通过环境变量覆盖
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 security = HTTPBearer(auto_error=False)
 class AuthModel(BaseModel):
     username: str
@@ -143,6 +150,17 @@ def redis_init():
         r.set("ticket_to_stall", json.dumps({}))
     print("[Redis] 初始化完成")
 
+def ensure_admin():
+    """首次启动时预置管理员账号，避免全新 Redis 下管理后台无人可登录"""
+    if r.exists(f"user:{ADMIN_USERNAME}"):
+        return
+    r.set(f"user:{ADMIN_USERNAME}", json.dumps({
+        "username": ADMIN_USERNAME,
+        "password": get_hash(ADMIN_PASSWORD),
+        "role": "admin",
+    }))
+    print(f"[Redis] 已预置管理员账号 {ADMIN_USERNAME}（可通过 ADMIN_PASSWORD 覆盖）")
+
 def get_stalls() -> List[dict]:
     return json.loads(r.get("stalls"))
 
@@ -213,6 +231,7 @@ def mark_all_feedback_done(feedback_type: str):
 @app.on_event("startup")
 async def startup_event():
     redis_init()
+    ensure_admin()
     simulator.attach_redis(r)
 
     async def on_update(stalls):
@@ -237,7 +256,8 @@ async def websocket_stalls(websocket: WebSocket):
 @app.post("/auth/register")
 def register(data: AuthModel):
     if r.exists(f"user:{data.username}"): raise HTTPException(400, "用户名已存在")
-    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": data.role}))
+    # 注册只允许创建普通用户：忽略客户端传入的 role，防止越权注册管理员
+    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": "user"}))
     return {"message": "注册成功"}
 
 @app.post("/auth/login")
