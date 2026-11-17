@@ -76,6 +76,12 @@ const router = createRouter({
 router.beforeEach((to) => {
   const user = useUserStore()
 
+  // 登录页必须最先放行：未登录时若也在这里跳 /login，会形成
+  // 「/login → /login?redirect=/login → …」的无限重定向，被 vue-router 中止后页面白屏
+  if (to.path === '/login') {
+    if (!user.isLoggedIn) return true
+    return user.isAdmin ? '/admin' : '/'
+  }
   if (to.path === '/admin/login') {
     return user.isAdmin ? '/admin' : true
   }
@@ -85,13 +91,12 @@ router.beforeEach((to) => {
     }
     return true
   }
-  // C 端页面
+  // C 端页面：未登录跳登录页；管理员会话统一回后台
   if (!user.isLoggedIn) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
-  // 管理员会话不进 C 端（普通用户访问登录页则回首页）
   if (user.isAdmin) return '/admin'
-  if (to.path === '/login') return '/'
+  return true
 })
 
 export default router

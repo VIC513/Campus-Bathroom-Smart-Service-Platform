@@ -19,5 +19,9 @@ dist-ssr/
 __pycache__/
 *.pyc
 
+# Python 虚拟环境（不可提交）
+.venv/
+venv/
+
 # Office 临时锁文件
 ~$*
