@@ -1,9 +1,17 @@
-# 校园浴室智能调度系统 - 后端运行依赖
-# Python 3.10+；Redis 需本机安装 Memurai（Windows，端口 6379）
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-redis>=5.0.0
-PyJWT>=2.8.0
-websockets>=12.0
-# data_generator.py（问卷参数仿真脚本，独立运行，非服务必需）
-numpy>=1.26.0
+# 计算思维项目 Python 依赖清单
+# 目标解释器：Python 3.14.6 (Anaconda)
+# 解释器路径：C:\Users\123\anaconda3\python.exe
+# 安装命令：C:\Users\123\anaconda3\python.exe -m pip install -r requirements.txt
+
+# 科学与数据处理
+numpy==2.4.6
+pandas==3.0.3
+scikit-learn==1.9.0
+lightgbm==4.7.0
+joblib==1.5.3
+
+# 数据库
+psycopg2-binary==2.9.13
+
+# 队列（simulator.py --mode realtime 使用）
+redis==8.1.0
