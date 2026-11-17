@@ -139,13 +139,13 @@
 - `POST /auth/login` : 登录获取 Token
 
 ### 2. 用户操作模块 (需 User Token)
-- `POST /queue` : 排队取号（自动分配空闲隔间并设为 `reserved`）。
+- `POST /queue` : 排队取号（自动分配空闲隔间并设为 `reserved`）。请求体可带 `stall_id` 指定隔间；不带则按队列规则分配。重复取号返回 400。
 - `GET /queue/my_ticket` : 查询我的票号状态（含排队位次、分配隔间、超时提示）。
 - `POST /queue/cancel` : 取消排队或取消已分配隔间。
 - **`POST /queue/scan_checkin`** : **扫码核销核心接口**。前端传入扫到的 `stall_id`，后端执行：线下现场取号、进错门拦截、正常核销变 `occupied` 等全量逻辑。
 
 ### 3. 管理员模块 (需 Admin Token)
-- `GET /admin/feedback` / `GET /admin/pending` : 查工单与待处理。
+- `GET /admin/feedback` / `GET /admin/pending` : 查工单与待处理（均已校验管理员身份）。
 - `POST /admin/maintenance-all` / `POST /admin/cleaning-all` : 一键全局维修/清理。
 - `POST /admin/fault-done` / `POST /admin/cleaning-done` : 单个完结工单。
 

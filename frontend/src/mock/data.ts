@@ -47,7 +47,7 @@ function groupZones(stalls: Stall[]): Bathzone[] {
   return [...map.entries()].map(([name, arr]) => ({ name, stalls: arr }))
 }
 
-/** 统计淋浴位状态数量（三态：空闲/占用/故障；cleaning 并入 occupied，统一不含保洁） */
+/** 统计淋浴位状态数量（三态：空闲/占用/故障；reserved、cleaning 并入 occupied） */
 export function countStalls(stalls: Stall[]) {
   let idle = 0
   let occupied = 0

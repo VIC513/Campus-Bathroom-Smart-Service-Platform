@@ -1,5 +1,5 @@
-/** 淋浴位状态：空闲 / 占用 / 保洁中 / 故障（与后端 FastAPI status 对齐） */
-export type StallStatus = 'idle' | 'occupied' | 'cleaning' | 'fault'
+/** 淋浴位状态：空闲 / 已预约 / 占用 / 保洁中 / 故障（与后端 FastAPI status 对齐） */
+export type StallStatus = 'idle' | 'reserved' | 'occupied' | 'cleaning' | 'fault'
 
 /** 故障类型（报修弹窗）。other 表示用户自定义问题 */
 export type FaultType = 'water_temp' | 'showerhead' | 'drainage' | 'lock' | 'other'
@@ -12,7 +12,7 @@ export type FaultType = 'water_temp' | 'showerhead' | 'drainage' | 'lock' | 'oth
 export const FAULT_REASON_MAP: Record<FaultType, string> = {
   water_temp: '水温异常',
   showerhead: '花洒堵塞',
-  drainage: '水压不足',
+  drainage: '排水堵塞',
   lock: '门锁损坏',
   other: '其他',
 }

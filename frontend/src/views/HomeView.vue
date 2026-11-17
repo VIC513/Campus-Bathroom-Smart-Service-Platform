@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { showConfirmDialog, showToast } from 'vant'
+import { showConfirmDialog, showToast, showFailToast } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { countStalls } from '@/mock/data'
 import { getWaterUsage, getWaitForecast } from '@/api'
@@ -46,8 +46,14 @@ async function tapStall(s: Stall) {
   } catch {
     return // 用户取消
   }
-  await store.reserveStallAt(current()!.id, s.stallId)
-  showToast(`已分配 ${s.stallId}，请前往`)
+  try {
+    const ticket = await store.reserveStallAt(current()!.id, s.stallId)
+    // 以后端实际分配的隔间为准（并发时可能被改派）
+    showToast(`已分配 ${ticket.assignedStall ?? s.stallId}，请前往`)
+  } catch (e) {
+    // 4xx 业务拒绝（隔间已被占、已有有效票号等）原样提示
+    showFailToast((e as Error).message || '预约失败')
+  }
 }
 
 /** 全满时排队等叫号（走后端 /queue，后端离线自动回退 mock） */
@@ -57,9 +63,13 @@ async function joinQueue() {
     showToast('当前还有空闲隔间，直接点格子选位即可')
     return
   }
-  const t = await store.takeTicketAt(current()!.id)
-  showToast(`取号成功，前面还有 ${t.ahead} 人`)
-  router.push('/queue')
+  try {
+    const t = await store.takeTicketAt(current()!.id)
+    showToast(`取号成功，前面还有 ${t.ahead} 人`)
+    router.push('/queue')
+  } catch (e) {
+    showFailToast((e as Error).message || '取号失败')
+  }
 }
 
 /* ===== 持续仿真：模拟「线下有人进/出 + 设备故障」，数据一直自动变动 =====
@@ -96,8 +106,12 @@ function simTick() {
 const showReport = ref(false)
 
 /** 报修提交：走后端 /feedback/fault（离线自动回退 mock），并联动该隔间变「维修」 */
-function onReported(stallId: number, type: FaultType, detail: string) {
-  store.submitFault(current()!.id, stallId, type, detail)
+async function onReported(stallId: number, type: FaultType, detail: string) {
+  try {
+    await store.submitFault(current()!.id, stallId, type, detail)
+  } catch (e) {
+    showFailToast((e as Error).message || '报修提交失败')
+  }
 }
 
 /* ================= 数据大盘（首页内嵌，与 /dashboard 逻辑一致） ================= */
@@ -158,6 +172,8 @@ const recommendText = computed(() => {
 
 onMounted(() => {
   store.fetchBathhouses()
+  // 刷新后从后端恢复自己的票号（排队中 / 已叫号）
+  store.restoreTicket()
   // 首页内嵌大盘：加载每日用水高峰曲线
   getWaterUsage().then((w) => (water.value = w))
   // 加载未来 1 小时等位预测（供智能分流推荐曲线；离线自动回退 mock）
