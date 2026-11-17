@@ -49,7 +49,7 @@ const router = createRouter({
     {
       path: '/admin/login',
       name: 'admin-login',
-      // 管理员登录：独立入口，仅校验预置管理员账号（admin/admin123）
+      // 管理员登录：独立入口，账号由后端预置并通过 role 校验
       component: () => import('@/views/AdminLoginView.vue'),
     },
     {

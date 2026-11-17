@@ -113,7 +113,9 @@
 ## 🔗 二、 前后端联调与状态字典（前端必看）
 
 **1. 鉴权机制**
-- 登录接口：`POST /auth/login`（预置测试账号：`admin/admin123`，`user/user123`）
+- 登录接口：`POST /auth/login`
+- 管理员账号由后端首次启动时自动预置，可通过环境变量 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 覆盖；普通用户请先注册
+- 生产部署请设置 `JWT_SECRET`；未设置时每次启动随机生成，重启后旧 Token 自动失效
 - 前端需在 Header 中携带：`Authorization: Bearer <access_token>`
 
 **2. 隔间状态字典 (Status)**

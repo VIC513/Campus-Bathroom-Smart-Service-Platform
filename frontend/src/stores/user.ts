@@ -6,7 +6,7 @@ import http from '@/api/http'
 /**
  * 账号体系：C 端账号已迁到后端（FastAPI /auth/register、/auth/login）。
  * - 登录成功后把后端 JWT 写入会话，http 拦截器统一附加 Authorization: Bearer <token>
- * - 普通用户与管理员共用后端账号表，用 role 区分；管理员账号 admin/admin123 由后端启动时预置
+ * - 普通用户与管理员共用后端账号表，用 role 区分；管理员账号由后端启动时预置
  * - 昵称后端不存储，按账号缓存在 localStorage 中（仅用于展示）
  */
 
@@ -150,8 +150,5 @@ export const useUserStore = defineStore('user', () => {
     persist(null)
   }
 
-  /** 供管理端登录页展示的演示凭证（与后端预置账号一致） */
-  const adminDemo = { account: 'admin', password: 'admin123' }
-
-  return { current, isLoggedIn, isAdmin, login, loginAdmin, register, logout, adminDemo }
+  return { current, isLoggedIn, isAdmin, login, loginAdmin, register, logout }
 })

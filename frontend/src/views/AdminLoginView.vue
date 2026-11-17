@@ -81,8 +81,7 @@ function backToStudent() {
       <button class="submit-btn" :disabled="submitting" @click="submit">登 录</button>
 
       <div class="tips">
-        <span>演示管理员账号：</span>
-        <b>{{ store.adminDemo.account }} / {{ store.adminDemo.password }}</b>
+        <span>管理员账号由后端预置，可通过环境变量配置</span>
       </div>
       <div class="tips switch-row">
         <span class="switch" @click="backToStudent">← 返回学生端登录</span>
