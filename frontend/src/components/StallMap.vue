@@ -6,14 +6,16 @@ defineProps<{ stalls: Stall[] }>()
 /** 状态 → 样式类名 */
 const cls: Record<StallStatus, string> = {
   idle: 's-free',
+  reserved: 's-used',
   occupied: 's-used',
   cleaning: 's-repair',
   fault: 's-off',
 }
 
-/** 状态中文名 */
+/** 状态中文名：reserved 表示已被预约但人未到，按界面三态统一显示「使用中」 */
 const names: Record<StallStatus, string> = {
   idle: '空闲',
+  reserved: '使用中',
   occupied: '使用中',
   cleaning: '保洁中',
   fault: '故障',

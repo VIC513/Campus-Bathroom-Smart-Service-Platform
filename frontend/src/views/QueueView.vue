@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { showConfirmDialog, showNotify } from 'vant'
+import { computed, onMounted } from 'vue'
+import { showConfirmDialog, showNotify, showFailToast } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 
 const store = useBathhouseStore()
 // Pinia setup store 解构时 computed 会被自动解包，这里用 computed 包回 ref 以在脚本中访问 .value
 const active = computed(() => store.activeTicket)
+
+// 刷新 / 直接进入本页时，从后端恢复自己的票号
+onMounted(() => store.restoreTicket())
 
 /** 模拟“叫号推送”演示：更新状态 + 震动提醒 */
 function onSimCall() {
@@ -18,8 +21,16 @@ function onSimCall() {
 
 /** 取消排队 */
 async function onCancel(ticketId: string) {
-  await showConfirmDialog({ title: '取消排队', message: '确定要取消当前排队吗？' })
-  await store.cancelMyTicket(ticketId)
+  try {
+    await showConfirmDialog({ title: '取消排队', message: '确定要取消当前排队吗？' })
+  } catch {
+    return // 用户点了取消
+  }
+  try {
+    await store.cancelMyTicket(ticketId)
+  } catch (e) {
+    showFailToast((e as Error).message || '取消失败')
+  }
 }
 </script>
 

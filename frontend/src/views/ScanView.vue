@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast, showConfirmDialog, showSuccessToast } from 'vant'
+import { showToast, showConfirmDialog, showSuccessToast, showFailToast } from 'vant'
 import { Html5Qrcode } from 'html5-qrcode'
 import QRCode from 'qrcode'
 import { useBathhouseStore } from '@/stores/bathhouse'
@@ -256,7 +256,8 @@ const isMyUsing = computed(() => result.value?.stallId === session.value?.stallI
 async function onEnter() {
   const s = result.value
   if (!s) return
-  if (s.status !== 'idle') {
+  // reserved 是「已预约未到场」，允许扫码核销；是否属于本人由后端校验
+  if (s.status !== 'idle' && s.status !== 'reserved') {
     showToast(stateOf(s).l + '中，不可入场')
     return
   }
@@ -271,7 +272,13 @@ async function onEnter() {
     return // 用户取消
   }
   const b = current()!
-  store.startUseAt(b.id, s.stallId)
+  try {
+    // 先让后端核销（reserved → occupied，并校验票号归属），失败则不入场
+    await store.startUseAt(b.id, s.stallId)
+  } catch (e) {
+    showFailToast((e as Error).message || '核销失败，请重新取号')
+    return
+  }
   session.value = { stallId: s.stallId, bathId: b.id, startAt: Date.now(), waterBase: b.waterTemp }
   // 扫码使用的浴室计入「常去浴室」（按隔间号累计，供「我的」页统计）
   if (userStore.current?.account) {
@@ -325,9 +332,13 @@ async function onExit() {
 
 /** 报修弹窗提交：先上报并标记维修，再完成流程 */
 async function onReported(stallId: number, type: FaultType, detail: string) {
-  // 必须 await：submitFault 内部先上报（含 mock 延迟）再改隔间状态
-  await store.submitFault(current()!.id, stallId, type, detail)
-  await finishUsage(true)
+  try {
+    // 必须 await：submitFault 内部先上报（含 mock 延迟）再改隔间状态
+    await store.submitFault(current()!.id, stallId, type, detail)
+    await finishUsage(true)
+  } catch (e) {
+    showFailToast((e as Error).message || '报修提交失败')
+  }
 }
 
 /**
