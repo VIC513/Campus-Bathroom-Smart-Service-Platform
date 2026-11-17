@@ -124,7 +124,12 @@ async function submit() {
       return
     }
     showSuccessToast('登录成功')
-    const redirect = (route.query.redirect as string) || '/'
+    // redirect 仅接受站内绝对路径，避免数组/外部地址造成跳转异常或二次循环
+    const rawRedirect = route.query.redirect
+    const redirect =
+      typeof rawRedirect === 'string' && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
+        ? rawRedirect
+        : '/'
     router.replace(redirect)
   } else {
     // 注册：成功不自动登录，回登录 tab 预填账号

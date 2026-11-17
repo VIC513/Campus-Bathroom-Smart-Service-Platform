@@ -71,7 +71,8 @@ const router = createRouter({
  * 全局路由守卫：
  * 1. /admin/login（管理员登录页）：仅管理员会话会自动跳回后台，其他人可访问
  * 2. /admin*（管理后台）：没有管理员身份一律跳管理员登录页（普通用户账号无效）
- * 3. C 端页面：未登录跳 /login；管理员会话不允许进入 C 端，统一回后台
+ * 3. /login（C 端登录页）：未登录放行（唯一可达页面）；已登录时管理员回后台、普通用户回首页
+ * 4. C 端页面：未登录跳 /login；管理员会话不允许进入 C 端，统一回后台
  */
 router.beforeEach((to) => {
   const user = useUserStore()
@@ -85,13 +86,19 @@ router.beforeEach((to) => {
     }
     return true
   }
+  // 登录页：必须放在未登录拦截之前放行，
+  // 否则未登录访问 /login 会再次被重定向到 /login，形成无限重定向
+  if (to.path === '/login') {
+    // 未登录：登录页是唯一可达页面，直接放行
+    // 已登录：管理员回后台，普通用户回首页
+    return user.isLoggedIn ? (user.isAdmin ? '/admin' : '/') : true
+  }
   // C 端页面
   if (!user.isLoggedIn) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
-  // 管理员会话不进 C 端（普通用户访问登录页则回首页）
+  // 管理员会话不进 C 端
   if (user.isAdmin) return '/admin'
-  if (to.path === '/login') return '/'
 })
 
 export default router
