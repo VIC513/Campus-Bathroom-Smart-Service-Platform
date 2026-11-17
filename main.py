@@ -7,11 +7,10 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 import random
-import asyncio
-import os
 import redis
+import time
 import json
 import jwt
 import hashlib
@@ -29,11 +28,8 @@ app = FastAPI(
     version="4.0.0"
 )
 
-# #9：JWT 密钥从环境变量读取，避免硬编码；未设置时使用内置值（仅限演示/开发）
-SECRET_KEY = os.environ.get("BATH_JWT_SECRET", "campus_bathroom_secret_key_2026_demo")
+SECRET_KEY = "campus_bathroom_secret_key_2026"
 ALGORITHM = "HS256"
-# Token 有效期：7 天（演示期较长，避免频繁登录打断体验）
-TOKEN_EXPIRE_HOURS = 24 * 7
 security = HTTPBearer(auto_error=False)
 class AuthModel(BaseModel):
     username: str
@@ -44,11 +40,8 @@ def get_hash(pwd: str) -> str: return hashlib.sha256(pwd.encode()).hexdigest()
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials: return None
     try:
-        # 开启 exp 校验，过期 token 会抛 ExpiredSignatureError
         return jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
-    except Exception:
+    except:
         raise HTTPException(status_code=401, detail="无效或过期的凭证")
 
 def require_user(user: dict = Depends(get_current_user)):
@@ -56,22 +49,14 @@ def require_user(user: dict = Depends(get_current_user)):
     return user
 
 def require_admin(user: dict = Depends(get_current_user)):
-    if user is None: raise HTTPException(status_code=401, detail="请先登录")
-    if user.get("role") != "admin":
+    if user is None or user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="权限不足，需要管理员身份")
     return user
 
 # ============================================================
 # 2. Redis 连接与 Key 定义
 # ============================================================
-r = redis.Redis(
-    host="localhost",
-    port=6379,
-    decode_responses=True,
-    # Memurai 等兼容实现不支持 RESP3 的 HELLO 命令，显式使用 RESP2 避免启动报
-    # "unknown command `HELLO`"
-    protocol=2,
-)
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 QUEUE_KEY = "queue:female"  # 使用 Redis List 存排队队列
 
 # ============================================================
@@ -121,10 +106,7 @@ class Stall(BaseModel):
     used_seconds: int = 0
 
 class QueueRequest(BaseModel):
-    # user_id 仅为兼容旧客户端保留，真实身份以 token.sub 为准（见 #8）
-    user_id: Optional[str] = None
-    # 可选：指定要预约的隔间（详情页点选空闲隔间时传入）
-    stall_id: Optional[str] = None
+    user_id: str
 
 class QueueResponse(BaseModel):
     ticket_id: str
@@ -136,8 +118,7 @@ class FeedbackRequest(BaseModel):
     stall_id: str
     reason: str
     detail: Optional[str] = ""
-    # user_id 仅为兼容旧客户端保留，真实身份以 token.sub 为准（见 #8）
-    user_id: Optional[str] = None
+    user_id: str
 
 # ============================================================
 # 6. Redis 数据操作工具
@@ -148,20 +129,6 @@ def init_stalls() -> List[dict]:
         for i in range(1, 16)
     ]
 
-def seed_users():
-    """预置演示账号（与 README 对齐）：admin/admin123 管理员、user/user123 普通用户"""
-    presets = [
-        ("admin", "admin123", "admin"),
-        ("user", "user123", "user"),
-    ]
-    for username, password, role in presets:
-        if not r.exists(f"user:{username}"):
-            r.set(
-                f"user:{username}",
-                json.dumps({"username": username, "password": get_hash(password), "role": role}),
-            )
-
-
 def redis_init():
     if not r.exists("stalls"):
         r.set("stalls", json.dumps(init_stalls()))
@@ -171,7 +138,6 @@ def redis_init():
         r.set("ticket_counter", json.dumps({"female": 0}))
     if not r.exists("ticket_to_stall"):
         r.set("ticket_to_stall", json.dumps({}))
-    seed_users()
     print("[Redis] 初始化完成")
 
 def get_stalls() -> List[dict]:
@@ -243,18 +209,7 @@ def mark_all_feedback_done(feedback_type: str):
 # ============================================================
 @app.on_event("startup")
 async def startup_event():
-    # Redis 未启动时最多重试 5 次（每次间隔 1 秒），仍失败则给出明确的中文提示，
-    # 而不是抛出难以理解的连接栈
-    for attempt in range(1, 6):
-        try:
-            redis_init()
-            break
-        except redis.exceptions.RedisError as e:
-            print(f"[启动] Redis 连接失败（第 {attempt}/5 次）：{e}")
-            if attempt == 5:
-                raise RuntimeError("无法连接 Redis，请先启动 Memurai（localhost:6379）后再启动后端")
-            await asyncio.sleep(1)
-
+    redis_init()
     simulator.attach_redis(r)
 
     async def on_update(stalls):
@@ -278,23 +233,18 @@ async def websocket_stalls(websocket: WebSocket):
 # ============================================================
 @app.post("/auth/register")
 def register(data: AuthModel):
-    # 注册只允许普通用户，忽略客户端传入的 role，避免自助提权为 admin
     if r.exists(f"user:{data.username}"): raise HTTPException(400, "用户名已存在")
-    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": "user"}))
+    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": data.role}))
     return {"message": "注册成功"}
 
 @app.post("/auth/login")
 def login(data: AuthModel):
     user_raw = r.get(f"user:{data.username}")
-    if not user_raw: raise HTTPException(400, "账号未注册，请先注册")
+    if not user_raw: raise HTTPException(400, "账号或密码错误")
     user_info = json.loads(user_raw)
     if user_info["password"] != get_hash(data.password): raise HTTPException(400, "账号或密码错误")
     
-    token = jwt.encode(
-        {"sub": data.username, "role": user_info["role"], "exp": datetime.now() + timedelta(hours=TOKEN_EXPIRE_HOURS)},
-        SECRET_KEY,
-        algorithm=ALGORITHM,
-    )
+    token = jwt.encode({"sub": data.username, "role": user_info["role"]}, SECRET_KEY, algorithm=ALGORITHM)
     return {"access_token": token, "role": user_info["role"], "username": data.username}
 
 
@@ -327,17 +277,19 @@ def get_stats():
     total = len(stalls)
     idle = count_by_status("idle")
     occupied = count_by_status("occupied")
+    reserved = count_by_status("reserved")  # 【新增】预约中/待核销
     cleaning = count_by_status("cleaning")
     fault = count_by_status("fault")
 
     return {
         "total_stalls": total,
         "idle_stalls": idle,
+        "reserved_stalls": reserved,      # 【新增】
         "occupied_stalls": occupied,
         "cleaning_stalls": cleaning,
         "fault_stalls": fault,
         "queue_length": get_queue_length(),
-        "usage_rate": round(occupied / total, 2) if total > 0 else 0
+        "usage_rate": round((occupied + reserved) / total, 2) if total > 0 else 0 # 使用率包含已经被占用的
     }
 
 @app.get("/stalls")
@@ -413,27 +365,23 @@ def recommend():
     }
 @app.get("/queue/my_ticket")
 def get_my_ticket(user: dict = Depends(require_user)):
-    """
-    查询当前登录用户自己的排队/使用状态
-    """
-    username = user.get("sub") # 从 Token 里获取当前登录的用户名
+    """查询当前登录用户自己的排队/使用状态"""
+    username = user.get("sub") 
     
-    # 1. 查排队队列（Redis List）
-    # 取出当前队列里的所有票号
     queue_list = r.lrange(QUEUE_KEY, 0, -1) 
-    
-    # 2. 查已经分配了隔间的映射表（Redis Hash/String）
     ticket_map = get_ticket_map()
-    
-    # 3. 因为票号里没有直接存用户名，我们需要一个小机制：
-    # 我们可以在取票时，把 user_id 和 ticket_id 绑定一下存起来。
-    # 为了简单，我们查一下队列里有没有前缀是这个用户的票。
-    # （为了严谨，最好在 /queue 取票时，把 ticket_id 存进 Redis 的 user:{username}:ticket 里）
-    
-    # 我们新增一个查询：这个用户有没有票
     my_ticket_id = r.get(f"user:{username}:ticket")
     
+    # 【修改点】判断没有票的情况
     if not my_ticket_id:
+        # 1. 检查有没有超时被踢的案底
+        if r.get(f"user:{username}:timeout_flag"):
+            r.delete(f"user:{username}:timeout_flag") # 报错一次后就删掉，防止一直弹
+            return {
+                "status": "expired", 
+                "message": "超时未核销！您的票已作废，请重新取号排队。"
+            }
+        # 2. 正常的无票状态
         return {"status": "no_ticket", "message": "您当前没有取号排队"}
         
     # 判断这个票是在排队，还是已经分配了
@@ -448,17 +396,14 @@ def get_my_ticket(user: dict = Depends(require_user)):
     elif my_ticket_id in ticket_map:
         stall_id = ticket_map[my_ticket_id]
         return {
-            "status": "in_use",
+            "status": "calling",
             "ticket_id": my_ticket_id,
             "stall_id": stall_id,
-            "message": f"您已分配到 {stall_id} 隔间，请前往使用"
+            "message": f"📢 叫号啦！请前往 {stall_id} 号隔间"
         }
     else:
-        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}
-
-@app.get("/admin/feedback")
-def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None, admin: dict = Depends(require_admin)):
-    # #7：补管理员鉴权，未登录/普通用户无法读取工单列表
+        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}@app.get("/admin/feedback")
+def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None):
     result = get_feedbacks()
     if type:
         result = [f for f in result if f["type"] == type]
@@ -467,8 +412,7 @@ def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None,
     return result
 
 @app.get("/admin/pending")
-def admin_pending(admin: dict = Depends(require_admin)):
-    # #7：补管理员鉴权
+def admin_pending():
     stalls = get_stalls()
     feedbacks = get_feedbacks()
     return {
@@ -482,80 +426,99 @@ def admin_pending(admin: dict = Depends(require_admin)):
 # ============================================================
 @app.post("/queue", response_model=QueueResponse)
 def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
-    # #8：真实身份统一以 token.sub 为准，忽略客户端传入的 user_id，防止伪造
     username = user.get("sub")
+    
+    if r.exists(f"user:{username}:ticket"):
+        raise HTTPException(400, "您已有一个有效票号，请勿重复取号！")
 
-    counter = get_counter()
-    counter["female"] += 1
-    ticket_id = f"F{counter['female']:04d}"
-    save_counter(counter)
-    # 绑定用户和票号（有效期一天），key 用 token 中的用户名
-    r.set(f"user:{username}:ticket", ticket_id, ex=86400)
+    counter = get_counter(); counter["female"] += 1
+    ticket_id = f"F{counter['female']:04d}"; save_counter(counter)
+    r.set(f"user:{username}:ticket", ticket_id, ex=86400) 
 
     stalls = get_stalls()
     idle_stalls = [s for s in stalls if s["status"] == "idle"]
-
-    # #6：如果客户端指定了隔间，校验可用性后精确分配；否则分配第一个空闲隔间
-    if req.stall_id:
-        target = find_stall(req.stall_id)
-        if target is None:
-            r.delete(f"user:{username}:ticket")
-            raise HTTPException(status_code=400, detail=f"隔间 {req.stall_id} 不存在")
-        if target["status"] != "idle":
-            r.delete(f"user:{username}:ticket")
-            raise HTTPException(status_code=400, detail=f"隔间 {req.stall_id} 当前不可用")
-        stall = target
-    elif idle_stalls:
+    if idle_stalls:
         stall = idle_stalls[0]
-    else:
-        stall = None
-
-    if stall is not None:
-        stall["status"] = "occupied"
+        # 【关键修改】变成 reserved（已预约），并记录分配时间
+        stall["status"] = "reserved"
         stall["used_seconds"] = 0
+        stall["assign_time"] = time.time() # 记录当前时间戳
         save_stalls(stalls)
+        
+        ticket_map = get_ticket_map(); ticket_map[ticket_id] = stall["stall_id"]; save_ticket_map(ticket_map)
+        return QueueResponse(ticket_id=ticket_id, position=0, estimated_wait=0, stall_id=stall["stall_id"])
 
-        ticket_map = get_ticket_map()
-        ticket_map[ticket_id] = stall["stall_id"]
-        save_ticket_map(ticket_map)
-
-        return QueueResponse(
-            ticket_id=ticket_id,
-            position=0,
-            estimated_wait=0,
-            stall_id=stall["stall_id"]
-        )
-
-    # 没有空闲隔间：入队 Redis List
     r.rpush(QUEUE_KEY, ticket_id)
-    position = r.llen(QUEUE_KEY)
-    return QueueResponse(
-        ticket_id=ticket_id,
-        position=position,
-        estimated_wait=position * 1080,
-        stall_id=None
-    )
-
+    return QueueResponse(ticket_id=ticket_id, position=r.llen(QUEUE_KEY), estimated_wait=r.llen(QUEUE_KEY)*1080, stall_id=None)
 @app.post("/queue/cancel")
-def cancel_queue(ticket_id: str,user: dict = Depends(require_user)):
-    # 改造点：从 Redis List 移除
+def cancel_queue(ticket_id: str, user: dict = Depends(require_user)):
+    username = user.get("sub")
+    
+    # 1. 先尝试从排队队列中删除
     removed = r.lrem(QUEUE_KEY, 1, ticket_id)
     if removed > 0:
+        r.delete(f"user:{username}:ticket") # 别忘了把这把锁删了
         return {"message": "已取消排队", "ticket_id": ticket_id}
 
+    # 2. 如果不在队列，说明已经分配了隔间（reserved 或 occupied）
     ticket_map = get_ticket_map()
     if ticket_id in ticket_map:
         stall_id = ticket_map.pop(ticket_id)
         save_ticket_map(ticket_map)
+        
         stalls = get_stalls()
         for s in stalls:
-            if s["stall_id"] == stall_id and s["status"] == "occupied":
-                s["status"] = "idle"
-                s["used_seconds"] = 0
+            if s["stall_id"] == stall_id:
+                # 【修复点】不管是预约状态还是占用状态，统统变回空闲
+                if s["status"] in ["reserved", "occupied"]:
+                    s["status"] = "idle"
+                    s["used_seconds"] = 0
+                    if "assign_time" in s:
+                        del s["assign_time"]
+                break
         save_stalls(stalls)
+        
+        # 【核心修复点】必须删掉 Redis 里的这行记录，否则系统认为你一直有票！
+        r.delete(f"user:{username}:ticket") 
+        
         return {"message": "已取消，隔间已释放", "ticket_id": ticket_id, "released_stall": stall_id}
 
-    raise HTTPException(status_code=404, detail="票号不存在")
+    # 3. 如果都找不到，说明可能已经洗完了，强行清理一下残留的键值
+    r.delete(f"user:{username}:ticket")
+    raise HTTPException(status_code=404, detail="票号不存在或已失效")
+
+class ScanRequest(BaseModel):
+    stall_id: str
+@app.post("/queue/scan_checkin")
+def scan_checkin(req: ScanRequest, user: dict = Depends(require_user)):
+    """线下扫码核销开关"""
+    username = user.get("sub")
+    stall = find_stall(req.stall_id)
+    if not stall: raise HTTPException(404, "隔间不存在")
+
+    my_ticket = r.get(f"user:{username}:ticket")
+    ticket_map = get_ticket_map()
+    
+    if not my_ticket:
+        # 线下未取票扫码
+        if stall["status"] != "idle":
+            raise HTTPException(400, f"警告：{req.stall_id} 已被占用或预约，请勿强行进入！")
+        # 无人且空闲，现场自动分配
+        counter = get_counter(); counter["female"] += 1
+        new_ticket = f"F{counter['female']:04d}"; save_counter(counter)
+        r.set(f"user:{username}:ticket", new_ticket, ex=86400)
+        update_stall(req.stall_id, status="occupied", used_seconds=0)
+        ticket_map[new_ticket] = req.stall_id; save_ticket_map(ticket_map)
+        return {"message": f"欢迎线下用户，已为您开启 {req.stall_id} 隔间", "status": "success"}
+    else:
+        # 线上取票后的扫码
+        assigned_stall = ticket_map.get(my_ticket)
+        if assigned_stall and assigned_stall != req.stall_id:
+            raise HTTPException(400, f"警告：系统为您分配的是 {assigned_stall}，请离开并前往对应隔间！")
+            
+        # 核销成功，开始使用
+        update_stall(req.stall_id, status="occupied", used_seconds=0)
+        return {"message": "扫码成功！检测到您已按时进入，开始计费。", "status": "success"}
 
 @app.post("/feedback/fault")
 def submit_fault(req: FeedbackRequest, user: dict = Depends(require_user)):
@@ -573,8 +536,7 @@ def submit_fault(req: FeedbackRequest, user: dict = Depends(require_user)):
         "stall_id": req.stall_id,
         "reason": req.reason,
         "detail": req.detail,
-        # #8：身份以 token.sub 为准，忽略客户端 user_id
-        "user_id": user.get("sub"),
+        "user_id": req.user_id,
         "time": datetime.now().isoformat(),
         "status": "pending"
     })
@@ -597,8 +559,7 @@ def submit_cleaning(req: FeedbackRequest, user: dict = Depends(require_user)):
         "stall_id": req.stall_id,
         "reason": req.reason,
         "detail": req.detail,
-        # #8：身份以 token.sub 为准，忽略客户端 user_id
-        "user_id": user.get("sub"),
+        "user_id": req.user_id,
         "time": datetime.now().isoformat(),
         "status": "pending"
     })
@@ -701,10 +662,16 @@ def trigger_peak( admin: dict = Depends(require_admin)):
     return {"message": "晚高峰已触发", "occupied": occupied}
 
 @app.post("/sim/reset")
-def sim_reset( admin: dict = Depends(require_admin)):
+def sim_reset(admin: dict = Depends(require_admin)):
     save_stalls(init_stalls())
-    r.delete(QUEUE_KEY)  # 改造点：清空 Redis List 队列
+    r.delete(QUEUE_KEY)  
     save_counter({"female": 0})
     save_feedbacks([])
     save_ticket_map({})
-    return {"message": "已重置"}
+    
+    # 【新增】清理所有用户的临时票号锁
+    keys = r.keys("user:*:ticket")
+    if keys:
+        r.delete(*keys)
+        
+    return {"message": "系统已重置"}

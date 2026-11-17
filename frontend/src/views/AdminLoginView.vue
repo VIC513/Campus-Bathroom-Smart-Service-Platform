@@ -37,7 +37,12 @@ async function submit() {
     return
   }
   showSuccessToast('管理员登录成功')
-  const redirect = (route.query.redirect as string) || '/admin'
+  // redirect 仅接受站内绝对路径，避免数组/外部地址造成跳转异常或二次循环
+  const rawRedirect = route.query.redirect
+  const redirect =
+    typeof rawRedirect === 'string' && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
+      ? rawRedirect
+      : '/admin'
   router.replace(redirect)
 }
 

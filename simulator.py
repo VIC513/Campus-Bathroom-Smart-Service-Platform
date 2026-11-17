@@ -1,7 +1,7 @@
 """
 数据仿真器（Simulator）
 基于问卷数据，模拟浴室隔间状态变化
-使用 Redis 存储隔间状态 + WebSocket 回调推送
+使用 Redis 存储隔间状态 + WebSocket 回调推送 + 自动补位叫号
 成员1：后端 Lead & DevOps
 """
 
@@ -91,9 +91,9 @@ class Simulator:
                     await asyncio.sleep(SIM_CONFIG["tick_seconds"])
                     continue
                 stalls = json.loads(raw)
-
                 prob = self.get_hourly_prob()
 
+                # 1. 随机产生洗澡的人 / 已有的人洗完
                 for s in stalls:
                     if s["status"] == "idle":
                         if random.random() < prob:
@@ -106,6 +106,51 @@ class Simulator:
                             s["status"] = "idle"
                             s["used_seconds"] = 0
                             self.total_completed += 1
+
+               # ========================================================
+                # 2. 【超时释放】检查有没有人预约了(reserved)但3分钟没来扫码
+                # ========================================================
+                import time
+                for s in stalls:
+                    if s["status"] == "reserved" and "assign_time" in s:
+                        if time.time() - s["assign_time"] > 180: # 180秒 = 3分钟
+                            print(f"[超时释放] 隔间 {s['stall_id']} 预约超时，已回收！")
+                            s["status"] = "idle"
+                            del s["assign_time"]
+                            
+                            # 清理映射表，并给超时用户留案底
+                            ticket_map = json.loads(self.r.get("ticket_to_stall") or "{}")
+                            for t_id, st_id in list(ticket_map.items()):
+                                if st_id == s["stall_id"]:
+                                    del ticket_map[t_id]
+                                    self.r.set("ticket_to_stall", json.dumps(ticket_map))
+                                    
+                                    # 找到该票号对应的用户，删掉他的票，并打上超时标记
+                                    keys = self.r.keys("user:*:ticket")
+                                    for k in keys:
+                                        if self.r.get(k) == t_id:
+                                            self.r.delete(k)
+                                            username = k.split(":")[1]
+                                            self.r.set(f"user:{username}:timeout_flag", "true", ex=300) # 案底保留5分钟
+                                    break
+                # ========================================================
+                # 3. 【自动补位】有空闲隔间且队列有人，自动叫号分配
+                # ========================================================
+                idle_stalls = [s for s in stalls if s["status"] == "idle"]
+                while idle_stalls:
+                    ticket_id = self.r.lpop("queue:female")
+                    if not ticket_id:
+                        break
+                    
+                    stall = idle_stalls.pop(0)
+                    # 这里补位也是分配给用户，状态变成 reserved（等待他来扫码）
+                    stall["status"] = "reserved"
+                    stall["used_seconds"] = 0
+                    stall["assign_time"] = time.time()
+                    
+                    ticket_map = json.loads(self.r.get("ticket_to_stall") or "{}")
+                    ticket_map[ticket_id] = stall["stall_id"]
+                    self.r.set("ticket_to_stall", json.dumps(ticket_map))
 
                 # 写回 Redis
                 self.r.set("stalls", json.dumps(stalls))
@@ -120,7 +165,6 @@ class Simulator:
             await asyncio.sleep(SIM_CONFIG["tick_seconds"])
 
         print(f"[仿真器] 已停止 {datetime.now()}")
-
     def start(self):
         if not self.running:
             self.task = asyncio.create_task(self.run())
