@@ -106,6 +106,13 @@ class Simulator:
                             s["status"] = "idle"
                             s["used_seconds"] = 0
                             self.total_completed += 1
+                            # 仿真自动释放时同步清理使用者绑定：
+                            # 否则真实扫码用户会被“使用中”锁住，无法再次取号/离场
+                            user_key = f"stall:{s['stall_id']}:user"
+                            username = self.r.get(user_key)
+                            if username:
+                                self.r.delete(f"user:{username}:using_stall")
+                                self.r.delete(user_key)
 
                # ========================================================
                 # 2. 【超时释放】检查有没有人预约了(reserved)但3分钟没来扫码

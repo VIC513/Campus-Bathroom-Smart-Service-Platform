@@ -81,7 +81,7 @@
 **技术实现**：
 - 在 FastAPI 中挂载 WebSocket 端点：`ws://127.0.0.1:8000/ws/stalls`。
 - 由 `ConnectionManager` 类统一管理所有活跃的前端连接。
-- **触发机制**：当 `simulator.py` 每次改变状态并写回数据后，立即触发回调，将最新的完整隔间状态数组通过 WebSocket 广播给所有在线的前端。
+- **触发机制**：建立连接后立即下发一次全量快照；`simulator.py` 每次状态变化后广播；取号/核销/离场/报修/管理端操作等 HTTP 写操作也会主动推送，前端首页和详情页无需轮询。
 - **实测效果**：运行 `test_ws.py`，终端无需刷新，每 5 秒自动打印 `[收到] stalls_update`，证明数据实现了毫秒级主动推送。
 
 ---
@@ -151,7 +151,8 @@
 - `POST /queue` : 排队取号（自动分配空闲隔间并设为 `reserved`）。请求体可带 `stall_id` 指定隔间；不带则按队列规则分配。重复取号返回 400。
 - `GET /queue/my_ticket` : 查询我的票号状态（含排队位次、分配隔间、超时提示）。
 - `POST /queue/cancel` : 取消排队或取消已分配隔间。
-- **`POST /queue/scan_checkin`** : **扫码核销核心接口**。前端传入扫到的 `stall_id`，后端执行：线下现场取号、进错门拦截、正常核销变 `occupied` 等全量逻辑。
+- **`POST /queue/scan_checkin`** : **扫码核销核心接口**。前端传入扫到的 `stall_id`，后端执行：线下现场取号、进错门拦截、核销变 `occupied`，并**消费票号**（清队列占位/分配映射/个人票锁）、记录当前使用者。
+- `POST /queue/scan_checkout` : 扫码离场。校验使用者后把隔间恢复 `idle`，并清理票号与使用绑定；重复调用保持幂等。
 
 ### 3. 管理员模块 (需 Admin Token)
 - `GET /admin/feedback` / `GET /admin/pending` : 查工单与待处理（均已校验管理员身份）。
@@ -176,6 +177,6 @@
 1. `POST /sim/reset` 重置。
 2. 登录获取 Token。
 3. `POST /queue` 取票（拿到 F01）。
-4. `POST /queue/scan_checkin` 传入 F01，模拟线下扫码。
+4. `POST /queue/scan_checkin` 传入 F01，模拟线下扫码（票号随即被消费，可再次取号需先离场）。
 5. 观察 `GET /stalls` 中 F01 变成红色的 `occupied`。
-6. 等待 3 分钟（或修改代码里的超时时间），观察 F01 自动释放回 `idle`。
+6. `POST /queue/scan_checkout` 传入 F01 模拟离场，观察 F01 恢复 `idle`；也可启动仿真器观察自动流转。

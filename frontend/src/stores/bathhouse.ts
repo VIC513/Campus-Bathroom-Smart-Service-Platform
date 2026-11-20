@@ -1,4 +1,4 @@
-import { ref, reactive, computed } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import type { Bathhouse, FaultType, QueueTicket, Recommend, WaitForecast, WaterPoint } from '@/types'
 import {
@@ -13,6 +13,7 @@ import {
   reportFault,
   fetchMyTicket,
   scanCheckin,
+  scanCheckout,
   BATHHOUSE_ID,
   BATHHOUSE_NAME,
 } from '@/api'
@@ -23,25 +24,6 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
   const bathhouses = ref<Bathhouse[]>([])
   const myTickets = ref<QueueTicket[]>([])
   const loading = ref(false)
-
-  /**
-   * 仿真保护：记录最近被用户操作（预约/取号/报修）的隔间。
-   * 持续仿真的自动事件在保护期内跳过这些隔间，避免「刚预约的格子马上被模拟别人抢走」。
-   */
-  const simProtect = reactive(new Map<string, number>())
-  /** 给隔间加 5 秒仿真保护（key 为 bathhouseId:stallId） */
-  function protectStall(bathhouseId: number, stallId: number | string) {
-    simProtect.set(`${bathhouseId}:${stallId}`, Date.now() + 5000)
-  }
-  /** 隔间是否处于仿真保护期；过期自动清理 */
-  function isStallProtected(bathhouseId: number, stallId: number | string): boolean {
-    const key = `${bathhouseId}:${stallId}`
-    const until = simProtect.get(key)
-    if (!until) return false
-    if (Date.now() < until) return true
-    simProtect.delete(key)
-    return false
-  }
 
   /** 刷新浴室列表 */
   async function fetchBathhouses() {
@@ -67,8 +49,6 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
   async function takeTicketAt(bathhouseId: number) {
     const ticket = await takeTicket(bathhouseId)
     myTickets.value.unshift(ticket)
-    // 排队若直接分配了空位，该格进入仿真保护期
-    if (ticket.assignedStall) protectStall(bathhouseId, ticket.assignedStall)
     return ticket
   }
 
@@ -87,8 +67,6 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     const b = bathhouses.value.find((x) => x.id === bathhouseId)
     const s = b?.stalls.find((x) => x.id === assigned || x.stallId === assigned)
     if (s) s.status = 'occupied'
-    // 该格进入仿真保护期：5 秒内持续仿真不再改动它
-    protectStall(bathhouseId, assigned)
     return ticket
   }
 
@@ -112,7 +90,6 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
           createdAt: Date.now(),
           assignedStall: dto.stall_id,
         })
-        protectStall(BATHHOUSE_ID, dto.stall_id)
       } else if (dto.status === 'queuing') {
         const ahead = Math.max(0, (dto.position ?? 1) - 1)
         myTickets.value.unshift({
@@ -156,8 +133,6 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     // 上报后端使用隔间编码（如 F02）；mock 回退时也能匹配本地隔间
     await reportFault(bathhouseId, s?.stallId ?? stallId, type, detail)
     if (s) s.status = 'fault'
-    // 该格进入仿真保护期：避免仿真立刻把报修格改成别的状态
-    protectStall(bathhouseId, s?.stallId ?? stallId)
   }
 
   /**
@@ -168,21 +143,32 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
   async function startUseAt(bathhouseId: number, stallId: number | string) {
     const b = bathhouses.value.find((x) => x.id === bathhouseId)
     const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
-    await scanCheckin(s?.stallId ?? stallId)
+    const code = String(s?.stallId ?? stallId)
+    await scanCheckin(code)
     // 后端核销后状态为 occupied；本地允许从 idle 或 reserved 进入占用
     if (s && (s.status === 'idle' || s.status === 'reserved')) s.status = 'occupied'
-    protectStall(bathhouseId, s?.stallId ?? stallId)
+    // 核销时后端已消费票号：本地票根同步标记完成，
+    // 避免「我的排队」仍显示叫号、也避免重复取消
+    const ticket = myTickets.value.find(
+      (t) => t.assignedStall === code && (t.status === 'waiting' || t.status === 'calling')
+    )
+    if (ticket) ticket.status = 'done'
   }
 
   /**
-   * 扫码离场：把使用中的隔间恢复为空闲（无故障时），并加仿真保护。
+   * 扫码离场：通知后端释放隔间与使用者绑定，再把本地隔间恢复为空闲。
    * 有故障的场景走 submitFault（提交报修 + 标记维修）。
    */
-  function endUseAt(bathhouseId: number, stallId: number | string) {
+  async function endUseAt(bathhouseId: number, stallId: number | string) {
     const b = bathhouses.value.find((x) => x.id === bathhouseId)
     const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
-    if (s) s.status = 'idle'
-    protectStall(bathhouseId, s?.stallId ?? stallId)
+    const code = String(s?.stallId ?? stallId)
+    try {
+      await scanCheckout(code)
+    } finally {
+      // 后端已释放或网络回退时都要让界面回到空闲，避免停留在“使用中”
+      if (s) s.status = 'idle'
+    }
   }
 
   /** 每日用水高峰数据 */
@@ -198,8 +184,6 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     forecast,
     waterUsage,
     activeTicket,
-    protectStall,
-    isStallProtected,
     fetchBathhouses,
     fetchBathhouse,
     takeTicketAt,

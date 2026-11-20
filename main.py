@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+import asyncio
 import random
 import redis
 import time
@@ -92,6 +93,16 @@ class ConnectionManager:
                 pass
 
 manager = ConnectionManager()
+
+# 主事件循环：同步接口运行在线程池中，需要它把广播任务调度回 WebSocket 所在循环
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+def notify_stalls_update():
+    """状态变更后主动推送最新快照（供同步接口调用，线程安全）"""
+    if _event_loop is None:
+        return
+    message = json.dumps({"type": "stalls_update", "data": get_stalls()})
+    asyncio.run_coroutine_threadsafe(manager.broadcast(message), _event_loop)
 
 # ============================================================
 # 4. 预设选项
@@ -209,6 +220,19 @@ def update_stall(stall_id: str, **kwargs):
 def count_by_status(status: str) -> int:
     return len([s for s in get_stalls() if s["status"] == status])
 
+def release_stall_user(stall_id: str):
+    """解除隔间与当前使用者的绑定（离场、报修、管理员处理后调用）"""
+    username = r.get(f"stall:{stall_id}:user")
+    if username:
+        r.delete(f"user:{username}:using_stall")
+    r.delete(f"stall:{stall_id}:user")
+
+def clear_all_using():
+    """清空所有「使用中」绑定（仿真重置/高峰重排时调用）"""
+    keys = r.keys("user:*:using_stall") + r.keys("stall:*:user")
+    if keys:
+        r.delete(*keys)
+
 def mark_feedback_done(stall_id: str):
     feedbacks = get_feedbacks()
     for f in feedbacks:
@@ -230,6 +254,8 @@ def mark_all_feedback_done(feedback_type: str):
 # ============================================================
 @app.on_event("startup")
 async def startup_event():
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
     redis_init()
     ensure_admin()
     simulator.attach_redis(r)
@@ -245,6 +271,8 @@ async def startup_event():
 async def websocket_stalls(websocket: WebSocket):
     await manager.connect(websocket)
     try:
+        # 连接后立即下发一次全量快照，前端无需等下一次状态变更才拿到真实数据
+        await websocket.send_text(json.dumps({"type": "stalls_update", "data": get_stalls()}))
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
@@ -459,6 +487,9 @@ def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
     
     if r.exists(f"user:{username}:ticket"):
         raise HTTPException(400, "您已有一个有效票号，请勿重复取号！")
+    # 正在使用隔间时不允许再取号，避免一人占用多格
+    if r.exists(f"user:{username}:using_stall"):
+        raise HTTPException(400, "您正在使用隔间，请先结束使用再取号！")
 
     counter = get_counter(); counter["female"] += 1
     ticket_id = f"F{counter['female']:04d}"; save_counter(counter)
@@ -487,6 +518,7 @@ def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
         save_stalls(stalls)
         
         ticket_map = get_ticket_map(); ticket_map[ticket_id] = stall["stall_id"]; save_ticket_map(ticket_map)
+        notify_stalls_update()
         return QueueResponse(ticket_id=ticket_id, position=0, estimated_wait=0, stall_id=stall["stall_id"])
 
     r.rpush(QUEUE_KEY, ticket_id)
@@ -521,6 +553,8 @@ def cancel_queue(ticket_id: str, user: dict = Depends(require_user)):
         
         # 【核心修复点】必须删掉 Redis 里的这行记录，否则系统认为你一直有票！
         r.delete(f"user:{username}:ticket") 
+        release_stall_user(stall_id)
+        notify_stalls_update()
         
         return {"message": "已取消，隔间已释放", "ticket_id": ticket_id, "released_stall": stall_id}
 
@@ -532,34 +566,85 @@ class ScanRequest(BaseModel):
     stall_id: str
 @app.post("/queue/scan_checkin")
 def scan_checkin(req: ScanRequest, user: dict = Depends(require_user)):
-    """线下扫码核销开关"""
+    """线下扫码核销：校验隔间归属 → 置为占用 → 消费票号并记录当前使用者"""
     username = user.get("sub")
     stall = find_stall(req.stall_id)
     if not stall: raise HTTPException(404, "隔间不存在")
 
+    # 一人同时只能使用一个隔间
+    using = r.get(f"user:{username}:using_stall")
+    if using and using != req.stall_id:
+        raise HTTPException(400, f"您正在使用 {using} 号隔间，请先结束使用")
+
     my_ticket = r.get(f"user:{username}:ticket")
     ticket_map = get_ticket_map()
-    
+
     if not my_ticket:
-        # 线下未取票扫码
+        # 线下未取票扫码：只能使用空闲隔间
         if stall["status"] != "idle":
             raise HTTPException(400, f"警告：{req.stall_id} 已被占用或预约，请勿强行进入！")
-        # 无人且空闲，现场自动分配
-        counter = get_counter(); counter["female"] += 1
-        new_ticket = f"F{counter['female']:04d}"; save_counter(counter)
-        r.set(f"user:{username}:ticket", new_ticket, ex=86400)
-        update_stall(req.stall_id, status="occupied", used_seconds=0)
-        ticket_map[new_ticket] = req.stall_id; save_ticket_map(ticket_map)
-        return {"message": f"欢迎线下用户，已为您开启 {req.stall_id} 隔间", "status": "success"}
     else:
-        # 线上取票后的扫码
+        # 线上取票后的扫码：必须在系统分配的隔间核销
         assigned_stall = ticket_map.get(my_ticket)
         if assigned_stall and assigned_stall != req.stall_id:
             raise HTTPException(400, f"警告：系统为您分配的是 {assigned_stall}，请离开并前往对应隔间！")
-            
-        # 核销成功，开始使用
-        update_stall(req.stall_id, status="occupied", used_seconds=0)
-        return {"message": "扫码成功！检测到您已按时进入，开始计费。", "status": "success"}
+        # 已分配隔间为 reserved；排队中（未分配）只允许扫码使用空闲隔间
+        if stall["status"] not in ("idle", "reserved"):
+            raise HTTPException(400, f"警告：{req.stall_id} 当前不可用，请勿强行进入！")
+        if stall["status"] == "reserved" and assigned_stall != req.stall_id:
+            raise HTTPException(400, f"警告：{req.stall_id} 已被其他同学预约，请勿强行进入！")
+
+    update_stall(req.stall_id, status="occupied", used_seconds=0)
+
+    # 核销即消费票号：清掉队列占位、分配映射和个人票锁，
+    # 否则“我的排队”会一直显示叫号，且 24 小时内无法再次取号
+    if my_ticket:
+        r.lrem(QUEUE_KEY, 0, my_ticket)
+        if my_ticket in ticket_map:
+            del ticket_map[my_ticket]
+            save_ticket_map(ticket_map)
+        r.delete(f"user:{username}:ticket")
+
+    # 记录当前使用者（带过期时间），供离场/报修/管理员处理时校验与清理
+    r.set(f"user:{username}:using_stall", req.stall_id, ex=7200)
+    r.set(f"stall:{req.stall_id}:user", username, ex=7200)
+
+    notify_stalls_update()
+    return {"message": "扫码成功！检测到您已按时进入，开始计费。", "status": "success", "stall_id": req.stall_id}
+
+
+@app.post("/queue/scan_checkout")
+def scan_checkout(req: ScanRequest, user: dict = Depends(require_user)):
+    """扫码离场：释放隔间并清理使用者/票号记录（重复调用保持幂等）"""
+    username = user.get("sub")
+    stall = find_stall(req.stall_id)
+    if stall is None:
+        raise HTTPException(status_code=404, detail=f"隔间 {req.stall_id} 不存在")
+
+    using = r.get(f"user:{username}:using_stall")
+    if using and using != req.stall_id:
+        raise HTTPException(400, f"您当前使用的是 {using} 号隔间，无法结束 {req.stall_id}")
+    # 没有使用记录且隔间不是空闲：说明是别人在占用，禁止释放
+    if not using and stall["status"] != "idle":
+        raise HTTPException(400, "您当前没有在该隔间使用中")
+
+    # 幂等：隔间可能已被仿真器/管理员释放，此时只清理残留记录
+    if stall["status"] == "occupied":
+        update_stall(req.stall_id, status="idle", used_seconds=0)
+
+    release_stall_user(req.stall_id)
+    r.delete(f"user:{username}:using_stall")
+
+    # 兼容历史数据：清掉仍指向该隔间的票号映射
+    ticket_map = get_ticket_map()
+    stale = [t for t, sid in ticket_map.items() if sid == req.stall_id]
+    for t in stale:
+        del ticket_map[t]
+    if stale:
+        save_ticket_map(ticket_map)
+
+    notify_stalls_update()
+    return {"message": f"已结束使用，{req.stall_id} 已释放", "stall_id": req.stall_id, "status": "success"}
 
 @app.post("/feedback/fault")
 def submit_fault(req: FeedbackRequest, user: dict = Depends(require_user)):
@@ -570,6 +655,12 @@ def submit_fault(req: FeedbackRequest, user: dict = Depends(require_user)):
         raise HTTPException(status_code=400, detail=f"reason 必须是以下之一：{FAULT_REASONS}")
 
     update_stall(req.stall_id, status="fault")
+    # 报修即结束本次使用：解除使用者绑定，避免用户被“使用中”锁住无法再取号
+    username = user.get("sub")
+    if r.get(f"user:{username}:using_stall") == req.stall_id:
+        release_stall_user(req.stall_id)
+        r.delete(f"user:{username}:using_stall")
+    notify_stalls_update()
 
     feedbacks = get_feedbacks()
     feedbacks.append({
@@ -593,6 +684,11 @@ def submit_cleaning(req: FeedbackRequest, user: dict = Depends(require_user)):
         raise HTTPException(status_code=400, detail=f"reason 必须是以下之一：{CLEANING_REASONS}")
 
     update_stall(req.stall_id, status="cleaning")
+    username = user.get("sub")
+    if r.get(f"user:{username}:using_stall") == req.stall_id:
+        release_stall_user(req.stall_id)
+        r.delete(f"user:{username}:using_stall")
+    notify_stalls_update()
 
     feedbacks = get_feedbacks()
     feedbacks.append({
@@ -621,12 +717,16 @@ def toggle_maintenance_all( admin: dict = Depends(require_admin)):
             s["used_seconds"] = 0
         save_stalls(stalls)
         mark_all_feedback_done("fault")
+        clear_all_using()
+        notify_stalls_update()
         return {"action": "end", "message": "现在已全部完成维修"}
     else:
         for s in stalls:
             s["status"] = "fault"
             s["used_seconds"] = 0
         save_stalls(stalls)
+        clear_all_using()
+        notify_stalls_update()
         return {"action": "start", "message": "现在已全部进入维修状态"}
 
 @app.post("/admin/cleaning-all")
@@ -640,12 +740,16 @@ def toggle_cleaning_all( admin: dict = Depends(require_admin)):
             s["used_seconds"] = 0
         save_stalls(stalls)
         mark_all_feedback_done("cleaning")
+        clear_all_using()
+        notify_stalls_update()
         return {"action": "end", "message": "现在已全部完成清理"}
     else:
         for s in stalls:
             s["status"] = "cleaning"
             s["used_seconds"] = 0
         save_stalls(stalls)
+        clear_all_using()
+        notify_stalls_update()
         return {"action": "start", "message": "现在已全部进入清理状态"}
 
 @app.post("/admin/fault-done")
@@ -657,6 +761,8 @@ def fault_done(stall_id: str, admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="该隔间当前不是 fault 状态")
     update_stall(stall_id, status="idle", used_seconds=0)
     mark_feedback_done(stall_id)
+    release_stall_user(stall_id)
+    notify_stalls_update()
     return {"stall_id": stall_id, "new_status": "idle", "message": "已取消维修"}
 
 @app.post("/admin/cleaning-done")
@@ -668,6 +774,8 @@ def cleaning_done(stall_id: str, admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="该隔间当前不是 cleaning 状态")
     update_stall(stall_id, status="idle", used_seconds=0)
     mark_feedback_done(stall_id)
+    release_stall_user(stall_id)
+    notify_stalls_update()
     return {"stall_id": stall_id, "new_status": "idle", "message": "已取消清理"}
 
 # ============================================================
@@ -700,6 +808,8 @@ def trigger_peak( admin: dict = Depends(require_admin)):
             s["status"] = "idle"
             s["used_seconds"] = 0
     save_stalls(stalls)
+    clear_all_using()
+    notify_stalls_update()
     return {"message": "晚高峰已触发", "occupied": occupied}
 
 @app.post("/sim/reset")
@@ -710,9 +820,11 @@ def sim_reset(admin: dict = Depends(require_admin)):
     save_feedbacks([])
     save_ticket_map({})
     
-    # 【新增】清理所有用户的临时票号锁
+    # 【新增】清理所有用户的临时票号锁与使用中绑定
     keys = r.keys("user:*:ticket")
     if keys:
         r.delete(*keys)
+    clear_all_using()
+    notify_stalls_update()
         
     return {"message": "系统已重置"}

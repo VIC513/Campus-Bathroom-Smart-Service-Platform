@@ -351,8 +351,15 @@ async function finishUsage(hasFault: boolean, viaSensor = false) {
   if (!s) return
   stopTimer()
   stopSensorMonitor()
-  // 无故障：隔间恢复空闲；有故障：submitFault 已标记维修
-  if (!hasFault) store.endUseAt(s.bathId, s.stallId)
+  // 无故障：通知后端释放隔间；有故障：submitFault 已在后端标记维修并解除使用绑定
+  if (!hasFault) {
+    try {
+      await store.endUseAt(s.bathId, s.stallId)
+    } catch (e) {
+      // 同步失败不阻塞本地结束流程，但提示用户后端可能仍是占用状态
+      showFailToast((e as Error).message || '离场同步失败')
+    }
+  }
   // 生成洗澡报告数据：真实计时时长 + 模拟平均水温 + 习惯分析文案，仅持久化到「我的」页
   const minutes = elapsed.value / 60
   const water = +(s.waterBase + (Math.random() * 2 - 1)).toFixed(1)

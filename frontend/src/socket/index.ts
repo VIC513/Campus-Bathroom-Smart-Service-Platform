@@ -62,7 +62,12 @@ function parseUpdates(raw: unknown): Array<{ stall_id: string; status: StallStat
  * 每次推送会就地修改淋浴位状态并触发视图更新。
  * 返回 stop 函数，组件卸载时调用。
  */
-export function useBathhouseChannel(stalls: Stall[]) {
+type StallSource = Stall[] | (() => Stall[])
+
+export function useBathhouseChannel(source: StallSource) {
+  // 支持传入数组或 getter：首页在数据加载前就需要建立连接，
+  // getter 能保证每次推送都作用到最新的响应式数组上
+  const getStalls = (): Stall[] => (typeof source === 'function' ? source() : source)
   let ws: WebSocket | null = null
   let closed = false
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -96,7 +101,7 @@ export function useBathhouseChannel(stalls: Stall[]) {
       }
       const updates = parseUpdates(data)
       updates.forEach((u) => {
-        const hit = stalls.find((s) => s.stallId === u.stall_id || s.no === u.stall_id)
+        const hit = getStalls().find((s) => s.stallId === u.stall_id || s.no === u.stall_id)
         if (hit) hit.status = u.status
       })
     }

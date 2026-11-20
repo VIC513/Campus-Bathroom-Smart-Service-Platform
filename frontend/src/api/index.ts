@@ -288,6 +288,17 @@ export async function scanCheckin(stallId: number | string): Promise<boolean> {
   )
 }
 
+/** 扫码离场：后端释放隔间与使用者绑定（重复调用保持幂等） */
+export async function scanCheckout(stallId: number | string): Promise<boolean> {
+  return safeFetch(
+    async () => {
+      await http.post('/queue/scan_checkout', { stall_id: String(stallId) })
+      return true
+    },
+    () => Promise.resolve(true)
+  )
+}
+
 /**
  * 报修：真实 POST /api/feedback/fault；失败回退为本地 mock 标记为故障。
  * 无论真实还是 mock，都同步在本地写一条报修记录，保证管理后台离线时也有工单可看。

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showToast, showFailToast } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { countStalls } from '@/mock/data'
 import { getWaterUsage, getWaitForecast } from '@/api'
+import { useBathhouseChannel } from '@/socket'
 import WaterPeakChart from '@/components/WaterPeakChart.vue'
 import ForecastChart from '@/components/ForecastChart.vue'
 import FaultReportPopup from '@/components/FaultReportPopup.vue'
@@ -72,34 +73,12 @@ async function joinQueue() {
   }
 }
 
-/* ===== 持续仿真：模拟「线下有人进/出 + 设备故障」，数据一直自动变动 =====
- * 无需手动开关：页面加载即自动运行。
- * 后端在线时以 WebSocket 推送为准（本地改动会被覆盖），后端离线时由本仿真兜底，
- * 保证看板数据始终在流动。预约/取号/报修过的隔间有 5 秒保护期，仿真不会抢走。
+/* ===== 实时状态：订阅后端 WebSocket 推送 =====
+ * 首页不再本地伪造隔间状态，所有变化以服务端快照为准；
+ * 使用 getter 保证首屏数据加载完成后，推送仍能作用到最新的响应式数组。
+ * 后端未启动时连接失败会静默重连，页面保留首次 HTTP 拉取的结果。
  */
-let simTimer: ReturnType<typeof setInterval> | null = null
-
-/** 每 2.5s 对随机一个空闲/占用隔间触发一个随机事件 */
-function simTick() {
-  const b = current()
-  if (!b) return
-  // 排除用户最近预约/取号/报修过的隔间（仿真保护期 5 秒，见 store.simProtect）
-  const free = (ss: Stall[]) => ss.filter((s) => !store.isStallProtected(b.id, s.stallId))
-  const idle = free(b.stalls.filter((s) => s.status === 'idle'))
-  const busy = free(b.stalls.filter((s) => s.status === 'occupied' || s.status === 'cleaning'))
-  const fault = free(b.stalls.filter((s) => s.status === 'fault'))
-  const roll = Math.random()
-  // 事件权重：有人进 45% / 有人出 40% / 突发故障 10% / 维修完成 5%
-  if (roll < 0.45 && idle.length) {
-    idle[Math.floor(Math.random() * idle.length)].status = 'occupied'
-  } else if (roll < 0.85 && busy.length) {
-    busy[Math.floor(Math.random() * busy.length)].status = 'idle'
-  } else if (roll < 0.95 && idle.length) {
-    idle[Math.floor(Math.random() * idle.length)].status = 'fault'
-  } else if (fault.length) {
-    fault[Math.floor(Math.random() * fault.length)].status = 'idle'
-  }
-}
+const channel = useBathhouseChannel(() => store.bathhouses[0]?.stalls ?? [])
 
 /* ===== 报修（首页入口，弹窗与详情页共用组件） ===== */
 
@@ -170,16 +149,17 @@ const recommendText = computed(() => {
 
 /** 峰值摘要文案 */
 
-onMounted(() => {
-  store.fetchBathhouses()
+onMounted(async () => {
+  // 先建立实时通道：后端会在连接后立即下发一次全量快照
+  channel.start()
+  // 拉取首屏数据（WS 尚未就绪时也能正常展示）
+  await store.fetchBathhouses()
   // 刷新后从后端恢复自己的票号（排队中 / 已叫号）
   store.restoreTicket()
-  // 首页内嵌大盘：加载每日用水高峰曲线
+  // 首页内嵌大盘：加载每日用水高峰曲线（本地模拟）
   getWaterUsage().then((w) => (water.value = w))
   // 加载未来 1 小时等位预测（供智能分流推荐曲线；离线自动回退 mock）
   getWaitForecast(current()?.id ?? 1).then((f) => (recommended.value = f))
-  // 自动开启持续仿真，无需用户手动开关
-  simTimer = setInterval(simTick, 2500)
 })
 </script>
 
