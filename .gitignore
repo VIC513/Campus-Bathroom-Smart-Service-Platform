@@ -1,23 +1,29 @@
-# 依赖与构建产物
-node_modules/
-dist/
-dist-ssr/
-
-# 编辑器 / 系统文件
-.vscode/
-.idea/
-.DS_Store
-*.local
-
-# 日志与临时文件
-*.log
-
-# 本机会话数据（登录演示账号存于浏览器 localStorage，不入库）
-*.zip
-
-# Python 缓存
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.eggs/
+*.egg
 
-# Office 临时锁文件
-~$*
+# 虚拟环境 / IDE
+.venv/
+venv/
+.env
+.env.local
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 可重新生成的中间产物（注：wait_time_model.pkl / anomaly_model.pkl 保留，为当前交付的必要模型文件）
+# wait_time_model.pkl
+# anomaly_model.pkl
+
+# 大体积仿真数据（注：当前 shower_logs_new.csv / shower_logs.csv 保留作为测试样本）
+# shower_logs_new.csv
+# shower_logs.csv

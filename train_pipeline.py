@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 模块归属: 算法 / 模型训练流水线  |  版本: v1.0.0  |  日期: 2026-11-20
 """
 训练流水线：从数据库加载真实数据训练两个模型
   1. 等待时间预测模型（三层架构）-> wait_time_model.pkl
@@ -8,6 +9,7 @@
 """
 
 import json
+import os
 import sys
 
 import numpy as np
@@ -21,7 +23,7 @@ from anomaly_detector import AnomalyDetector
 DB_CONFIG = {
     "dbname":   "bathroom_female_db",
     "user":     "postgres",
-    "password": "laiCAI2199",
+    "password": os.environ.get("BATH_DB_PASSWORD", ""),
     "host":     "localhost",
     "port":     "5432",
 }
@@ -158,11 +160,29 @@ def run_baseline_comparison(ds: pd.DataFrame):
 
 # ==================== 主流程 ====================
 if __name__ == '__main__':
-    pg = psycopg2.connect(**DB_CONFIG)
-    df = load_logs(pg)
-    pg.close()
-    print(f"[Load] shower_logs = {len(df)} 条 | "
-          f"故障 {df['is_fault'].sum()} 条 ({df['is_fault'].mean():.2%})")
+    # 优先从 PostgreSQL 读取；连不上则 fallback 到同目录的 CSV
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "shower_logs_new.csv")
+    try:
+        pg = psycopg2.connect(**DB_CONFIG)
+        df = load_logs(pg)
+        pg.close()
+        print(f"[Load] 来源 PostgreSQL | shower_logs = {len(df)} 条")
+    except Exception as e:
+        print(f"[Load] PostgreSQL 不可用 ({type(e).__name__})，"
+              f"fallback 读取 CSV: {csv_path}")
+        df = pd.read_csv(csv_path)
+        # CSV 导出时 PostgreSQL boolean 列会变成 't'/'f' 字符串，统一转 bool
+        for col in df.columns:
+            s = df[col].astype(str).str.lower()
+            if s.isin(['t', 'f', 'true', 'false', '1', '0']).all() \
+                    and s.nunique() <= 2:
+                df[col] = s.isin(['t', 'true', '1'])
+        if 'start_time' in df.columns:
+            df['start_time'] = pd.to_datetime(df['start_time'], utc=True) \
+                .dt.tz_convert('Asia/Shanghai')
+    print(f"       故障 {df['is_fault'].sum()} 条 "
+          f"({df['is_fault'].mean():.2%})")
 
     predictor, meta = train_wait_model(df)
 

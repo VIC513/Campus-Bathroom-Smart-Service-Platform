@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 模块归属: 数据 / 仿真数据生成  |  版本: v1.0.0  |  日期: 2026-11-20
 """
 基于女生问卷统计的校园浴室数据仿真器
 依赖: pip install numpy psycopg2-binary redis
@@ -28,7 +29,7 @@ import numpy as np
 DB_CONFIG = {
     "dbname":   "bathroom_female_db",
     "user":     "postgres",
-    "password": "laiCAI2199",
+    "password": os.environ.get("BATH_DB_PASSWORD", ""),
     "host":     "localhost",
     "port":     "5432",
 }

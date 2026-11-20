@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 模块归属: 算法 / 异常检测运行入口  |  版本: v1.0.0  |  日期: 2026-11-20
 """
 基于三路传感器规则对历史数据做异常判定（只读 sensor_events / shower_logs / stalls，
 只写 anomaly_events 与 stalls）。判定后 stall_status=fault、is_available=false，
@@ -13,6 +14,7 @@
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
@@ -20,7 +22,8 @@ from psycopg2.extras import Json, execute_values
 
 DB_CONFIG = {
     "dbname": "bathroom_female_db", "user": "postgres",
-    "password": "laiCAI2199", "host": "localhost", "port": "5432",
+    "password": os.environ.get("BATH_DB_PASSWORD", ""),
+    "host": "localhost", "port": "5432",
 }
 TZ = timezone(timedelta(hours=8))
 

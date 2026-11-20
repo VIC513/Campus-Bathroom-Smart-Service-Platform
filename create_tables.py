@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 模块归属: 数据库 / 建表与初始化  |  版本: v1.0.0  |  日期: 2026-11-20
 """
 create_tables.py
 女生宿舍楼 15 个隔间建库建表（按《数据库参数设计.pdf》的 8 张表结构）
@@ -6,6 +7,7 @@ create_tables.py
 用法：先运行 survey_config.py（生成参数），再运行本脚本
 """
 
+import os
 import hashlib
 
 import psycopg2
@@ -20,7 +22,7 @@ from survey_config import SYSTEM_CONFIG_INIT
 DB_CONFIG = {
     "dbname":   "bathroom_female_db",
     "user":     "postgres",
-    "password": "laiCAI2199",
+    "password": os.environ.get("BATH_DB_PASSWORD", ""),
     "host":     "localhost",
     "port":     "5432",
 }

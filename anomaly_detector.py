@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 模块归属: 算法 / 异常检测  |  版本: v1.0.0  |  日期: 2026-11-20
 """
 异常检测与故障预警算法
 依赖: pip install scikit-learn numpy
