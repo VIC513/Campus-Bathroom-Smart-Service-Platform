@@ -1,8 +1,8 @@
-﻿﻿<script setup lang="ts">
+﻿﻿﻿﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showSuccessToast, showToast, showFailToast } from 'vant'
-import { getAdminOverview, adminFaultDone, adminToggleMaintenanceAll } from '@/api'
+import { getAdminOverview, adminFaultDone, adminToggleMaintenanceAll, BATHHOUSE_NAME } from '@/api'
 import type { AdminOverview } from '@/api'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { useUserStore } from '@/stores/user'
@@ -154,7 +154,7 @@ onMounted(reload)
     <div class="hero">
       <div>
         <div class="hero-title">管理后台</div>
-        <div class="hero-sub">1 号楼浴室 · 维修工单处理</div>
+        <div class="hero-sub">{{ BATHHOUSE_NAME }} · 维修工单处理</div>
       </div>
       <button class="refresh-btn" :disabled="loading" @click="onRefresh">
         <van-icon name="replay" />

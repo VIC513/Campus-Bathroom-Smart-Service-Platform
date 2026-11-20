@@ -240,7 +240,7 @@ async function onReported(stallId: number, type: FaultType, detail: string) {
           <span class="dash-badge">{{ peakText }}</span>
         </div>
         <WaterPeakChart :usage="scaledWater" :height="120" />
-        <div class="dash-note">曲线振幅随本楼实时使用率变化（1 号楼为后端实时数据）</div>
+        <div class="dash-note">曲线振幅随本楼实时使用率变化（本楼为后端实时数据）</div>
       </div>
 
       <div class="dash-card">

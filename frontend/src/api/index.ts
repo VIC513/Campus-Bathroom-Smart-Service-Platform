@@ -59,10 +59,18 @@ export function setCurrentUserId(id: string) {
   currentUserId = id
 }
 
-/** 真实后端接入的楼栋（固定为 1 号楼：与模拟列表中的「1 号楼」占位对齐，其余 30 栋走 mock） */
-export const BATHHOUSE_NAME = '1 号楼浴室'
-const BATHHOUSE_AREA = '宿舍 1 栋'
-const BATHHOUSE_ID = 1
+/**
+ * 后端接入的楼栋配置。
+ * 默认 1 号楼；可通过 .env 覆盖，避免楼栋 id / 名称散落在各页面：
+ *   VITE_BATHHOUSE_ID=2
+ *   VITE_BATHHOUSE_NAME=2 号楼浴室
+ *   VITE_BATHHOUSE_AREA=宿舍 2 栋
+ */
+export const BATHHOUSE_ID = Number(import.meta.env.VITE_BATHHOUSE_ID || 1)
+export const BATHHOUSE_NAME =
+  (import.meta.env.VITE_BATHHOUSE_NAME as string | undefined) || `${BATHHOUSE_ID} 号楼浴室`
+const BATHHOUSE_AREA =
+  (import.meta.env.VITE_BATHHOUSE_AREA as string | undefined) || `宿舍 ${BATHHOUSE_ID} 栋`
 
 /** 是否为真实后端接入的楼栋（仅 1 号楼） */
 const isRealBuilding = (id: number) => id === BATHHOUSE_ID

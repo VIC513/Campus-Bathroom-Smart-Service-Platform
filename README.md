@@ -132,6 +132,13 @@
 - `calling`：已叫号分配（显示去对应隔间扫码）
 - `expired`：超时作废（弹窗提示“超时未核销，请重新排队”）
 
+**4. 前端配置与容错（frontend/）**
+- 启动：`cd frontend && npm install && npm run dev`，默认 `http://localhost:5173`；`/api` 与 `/ws` 由 Vite 代理到 `http://localhost:8000`
+- 楼栋配置：`VITE_BATHHOUSE_ID` / `VITE_BATHHOUSE_NAME` / `VITE_BATHHOUSE_AREA`，默认 1 号楼（楼栋 id、名称集中在 `src/api/index.ts`）
+- WebSocket 地址：默认与页面同域并自动适配 `wss`；前后端分域部署时设置 `VITE_WS_URL`（支持 `ws(s)://host[/ws/stalls]` 或 `http(s)://host`）
+- 离线回退：后端不可达（连接失败或 5xx）时，登录/注册自动使用本地离线账号（密码以 SHA-256 摘要存于 localStorage，仅演示用途）；管理员入口不做离线回退
+- 会话过期：任意接口返回 401 时自动清除会话，管理员跳 `/admin/login`、普通用户跳 `/login`，并通过 `redirect` 保留原页面
+
 ---
 
 ## 📚 三、 核心 API 模块清单
