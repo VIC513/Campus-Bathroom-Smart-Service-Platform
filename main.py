@@ -17,7 +17,7 @@ import hashlib
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import Depends   # 如果你原来没导 Depends，记得加上
 
-from simulator import simulator
+from simulator import simulator,SIM_CONFIG
 
 # ============================================================
 # 1. FastAPI 应用
@@ -310,16 +310,10 @@ def predict():
     idle_count = count_by_status("idle")
     hour = datetime.now().hour
 
-    if 19 <= hour <= 22:
-        avg_duration = 1200
-    elif 12 <= hour <= 14:
-        avg_duration = 1080
-    else:
-        avg_duration = 900
-
-    if idle_count == 0:
-        wait_seconds = queue_len * avg_duration
-    else:
+    avg_duration = SIM_CONFIG["avg_duration_seconds"]
+    if idle_count == 0: 
+           wait_seconds = queue_len * avg_duration
+    else: 
         wait_seconds = int(queue_len / idle_count * avg_duration)
 
     if wait_seconds < 300:
@@ -402,7 +396,10 @@ def get_my_ticket(user: dict = Depends(require_user)):
             "message": f"📢 叫号啦！请前往 {stall_id} 号隔间"
         }
     else:
-        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}@app.get("/admin/feedback")
+        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}
+    
+@app.get("/admin/feedback")
+    
 def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None):
     result = get_feedbacks()
     if type:
@@ -669,9 +666,10 @@ def sim_reset(admin: dict = Depends(require_admin)):
     save_feedbacks([])
     save_ticket_map({})
     
-    # 【新增】清理所有用户的临时票号锁
+   
     keys = r.keys("user:*:ticket")
-    if keys:
-        r.delete(*keys)
-        
+    if keys: r.delete(*keys)
+    # 加上下面这两行
+    timeout_keys = r.keys("user:*:timeout_flag")
+    if timeout_keys: r.delete(*timeout_keys)
     return {"message": "系统已重置"}

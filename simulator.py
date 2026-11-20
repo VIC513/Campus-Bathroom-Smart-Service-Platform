@@ -14,31 +14,24 @@ from datetime import datetime
 # ============================================================
 # 1. 仿真参数（基于问卷统计结果）
 # ============================================================
-
-SIM_CONFIG = {
-    # 题 3：洗澡时长分布（秒）
-    "avg_duration_seconds": 1130,    # 问卷加权平均：18.8 分钟
-    "std_seconds": 450,              # 标准差约 7.5 分钟
-    "min_duration": 300,             # 最短 5 分钟
-    "max_duration": 2700,            # 最长 45 分钟
-
-    # 题 2：24 小时到达概率权重（总和 = 1.0）
-    "hourly_weights": [
-        0.00, 0.00, 0.00, 0.00, 0.00, 0.00,  # 00-05
-        0.01, 0.01, 0.01, 0.01, 0.01, 0.01,  # 06-11
-        0.02, 0.03, 0.02, 0.03, 0.03, 0.05,  # 12-17
-        0.15, 0.15, 0.21, 0.15, 0.05, 0.05,  # 18-23
-    ],
-
-    # 题 5：最大等待容忍（秒）
-    "max_wait_seconds": 360,
-
-    # 题 6：跨区推荐接受率（暂不用，多楼栋时再用）
-    "accept_recommendation_rate": 0.75,
-
-    # 仿真运行参数
-    "tick_seconds": 5,
-    "idle_to_occupied_prob": 0.1,
+SIM_CONFIG ={ 
+    "avg_duration_seconds": 1130,    # 问卷加权平均：18.8 分钟  
+    "std_seconds": 450,
+    "min_duration": 300,                 
+    "max_duration": 2700,                   
+     # 【更新】问卷第4题：冬季气温对时长的影响  
+    "cold_threshold": 10.0,          # 低于10度算冷    
+    "extra_duration": 180,           # 冬季洗澡时长增加180秒(3分钟)   
+      # 【更新】问卷第2题：24 小时到达概率权重    
+    "hourly_weights": [      
+        0.00, 0.00, 0.00, 0.00, 0.00, 0.00,  # 00:00 - 05:59 (深夜无人)        
+        0.01, 0.01, 0.01, 0.01, 0.01, 0.01,  # 06:00 - 11:59 (早晨极少)       
+        0.03, 0.03, 0.02, 0.03, 0.04, 0.08,  # 12:00 - 17:59 (午休+课后)       
+        0.15, 0.25, 0.25, 0.15, 0.05, 0.01   # 18:00 - 23:59 (19点-22点为绝对高峰)  
+        ],    
+    "max_wait_seconds": 360,    
+    "tick_seconds": 5,    
+    "idle_to_occupied_prob": 0.1, # 每5秒基础到达概率
 }
 
 
@@ -63,17 +56,19 @@ class Simulator:
         """设置状态变化回调（用于 WebSocket 推送）"""
         self.on_update = callback
 
-    def generate_duration(self) -> int:
+    def generate_duration(self, temperature: float = 25.0) -> int:
         """生成一个洗澡时长（秒）"""
         cfg = SIM_CONFIG
         d = int(random.gauss(cfg["avg_duration_seconds"], cfg["std_seconds"]))
+        if temperature < cfg["cold_threshold"]:
+            d += cfg["extra_duration"]
         return max(cfg["min_duration"], min(d, cfg["max_duration"]))
 
     def get_hourly_prob(self) -> float:
         """根据当前小时，返回该小时的到达概率"""
         hour = datetime.now().hour
         weight = SIM_CONFIG["hourly_weights"][hour]
-        return weight * SIM_CONFIG["idle_to_occupied_prob"] * 10
+        return weight * SIM_CONFIG["idle_to_occupied_prob"]
 
     async def run(self):
         """仿真主循环"""
@@ -102,7 +97,7 @@ class Simulator:
                             self.total_arrivals += 1
                     elif s["status"] == "occupied":
                         s["used_seconds"] += SIM_CONFIG["tick_seconds"]
-                        if s["used_seconds"] >= self.generate_duration():
+                        if s["used_seconds"] >= self.generate_duration(temperature=15.0):
                             s["status"] = "idle"
                             s["used_seconds"] = 0
                             self.total_completed += 1
