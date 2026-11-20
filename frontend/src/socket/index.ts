@@ -10,7 +10,34 @@ import type { Stall, StallStatus } from '@/types'
  * 后端未启动时静默失败（不打扰页面），连接断开后每 3 秒自动重连，后端上线即自动恢复。
  */
 
-const WS_URL = `ws://${location.host}/ws/stalls`
+const WS_PATH = '/ws/stalls'
+
+/**
+ * 解析 WebSocket 地址：
+ * 1. 优先读取 VITE_WS_URL（前后端分域部署时使用）
+ *    - ws(s)://host/ws/stalls：直接使用
+ *    - ws(s)://host 或 host:port：自动补 /ws/stalls
+ *    - http(s)://host：自动转换为对应的 ws(s) 协议
+ * 2. 未配置时按当前页面同域推导；https 页面自动使用 wss，
+ *    避免浏览器以「混合内容」为由拦截连接。
+ */
+function resolveWsUrl(): string {
+  const explicit = (import.meta.env.VITE_WS_URL as string | undefined)?.trim()
+  if (explicit) {
+    const value = explicit.replace(/\/$/, '')
+    if (/^wss?:\/\//i.test(value)) {
+      return value.endsWith(WS_PATH) ? value : `${value}${WS_PATH}`
+    }
+    if (/^https?:\/\//i.test(value)) {
+      return `${value.replace(/^http/i, 'ws')}${WS_PATH}`
+    }
+    return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${value}${WS_PATH}`
+  }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${location.host}${WS_PATH}`
+}
+
+const WS_URL = resolveWsUrl()
 
 /** 解析后端推送：优先整包快照，兼容单条 / 纯数组两种旧格式 */
 function parseUpdates(raw: unknown): Array<{ stall_id: string; status: StallStatus }> {
@@ -38,14 +65,26 @@ function parseUpdates(raw: unknown): Array<{ stall_id: string; status: StallStat
 export function useBathhouseChannel(stalls: Stall[]) {
   let ws: WebSocket | null = null
   let closed = false
-  let timer: ReturnType<typeof setInterval> | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
 
-  const start = () => {
+  /** 断线重连：统一在这里清旧定时器，避免多次 onclose 叠加多个重连任务 */
+  function scheduleReconnect() {
+    if (closed) return
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(start, 3000)
+  }
+
+  function start() {
+    closed = false
+    // 已连接或正在连接时不重复建连
+    if (ws && ws.readyState <= WebSocket.OPEN) return
+
     try {
       ws = new WebSocket(WS_URL)
     } catch {
-      // 连接失败（如后端未启动），静默忽略，不干扰页面
-      return () => {}
+      // 地址非法等同步异常：保持静默并稍后重试，不影响页面
+      scheduleReconnect()
+      return
     }
 
     ws.onmessage = (e) => {
@@ -64,23 +103,24 @@ export function useBathhouseChannel(stalls: Stall[]) {
 
     // 连接意外断开：静默重连（后端上线后自动恢复）
     ws.onclose = () => {
-      if (closed) return
-      timer = setTimeout(() => {
-        start()
-      }, 3000)
-    }
-
-    return () => {
-      closed = true
-      ws?.close()
-      if (timer) clearTimeout(timer)
+      ws = null
+      scheduleReconnect()
     }
   }
 
   const stop = () => {
     closed = true
-    ws?.close()
-    if (timer) clearTimeout(timer)
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    if (ws) {
+      // 先摘掉回调再关闭，避免主动关闭触发重连
+      ws.onclose = null
+      ws.onmessage = null
+      ws.close()
+      ws = null
+    }
   }
 
   onBeforeUnmount(stop)

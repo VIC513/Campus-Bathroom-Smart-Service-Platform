@@ -13,6 +13,7 @@ import {
   reportFault,
   fetchMyTicket,
   scanCheckin,
+  BATHHOUSE_ID,
   BATHHOUSE_NAME,
 } from '@/api'
 import { countStalls } from '@/mock/data'
@@ -103,7 +104,7 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
         myTickets.value.unshift({
           id: dto.ticket_id,
           code: dto.ticket_id,
-          bathhouseId: 1,
+          bathhouseId: BATHHOUSE_ID,
           bathhouseName: BATHHOUSE_NAME,
           status: 'calling',
           ahead: 0,
@@ -111,13 +112,13 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
           createdAt: Date.now(),
           assignedStall: dto.stall_id,
         })
-        protectStall(1, dto.stall_id)
+        protectStall(BATHHOUSE_ID, dto.stall_id)
       } else if (dto.status === 'queuing') {
         const ahead = Math.max(0, (dto.position ?? 1) - 1)
         myTickets.value.unshift({
           id: dto.ticket_id,
           code: dto.ticket_id,
-          bathhouseId: 1,
+          bathhouseId: BATHHOUSE_ID,
           bathhouseName: BATHHOUSE_NAME,
           status: 'waiting',
           ahead,

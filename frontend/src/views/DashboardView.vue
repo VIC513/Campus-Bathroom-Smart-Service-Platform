@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getWaterUsage } from '@/api'
+import { getWaterUsage, BATHHOUSE_ID } from '@/api'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import WaterPeakChart from '@/components/WaterPeakChart.vue'
 import type { Bathhouse, Bathzone, WaterPoint } from '@/types'
@@ -16,9 +16,6 @@ const store = useBathhouseStore()
  */
 const water = ref<WaterPoint[]>([])
 const loading = ref(true)
-
-/** 真实接入的楼栋 id（与 api/index.ts 的 BATHHOUSE_ID 保持一致） */
-const REAL_ID = 1
 
 onMounted(async () => {
   try {
@@ -64,7 +61,7 @@ const zoneRows = computed<ZoneRow[]>(() => {
       name: z.name,
       rate,
       turnover: +((rate / 100) * 8).toFixed(1),
-      real: b.id === REAL_ID,
+      real: b.id === BATHHOUSE_ID,
     }
   })
 })
