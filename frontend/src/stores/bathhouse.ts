@@ -11,6 +11,10 @@ import {
   getWaitForecast,
   getWaterUsage,
   reportFault,
+  fetchMyTicket,
+  scanCheckin,
+  BATHHOUSE_ID,
+  BATHHOUSE_NAME,
 } from '@/api'
 import { countStalls } from '@/mock/data'
 
@@ -78,13 +82,53 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     // 加入我的票夹
     const exists = myTickets.value.find((t) => t.id === ticket.id)
     if (!exists) myTickets.value.unshift(ticket)
-    // 联动更新内存中的楼隔间状态
+    // 以「后端实际分配的隔间」为准：后端可能因并发把用户改派到其他空位
+    const assigned = ticket.assignedStall ?? stallId
     const b = bathhouses.value.find((x) => x.id === bathhouseId)
-    const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
+    const s = b?.stalls.find((x) => x.id === assigned || x.stallId === assigned)
     if (s) s.status = 'occupied'
     // 该格进入仿真保护期：5 秒内持续仿真不再改动它
-    protectStall(bathhouseId, stallId)
+    protectStall(bathhouseId, assigned)
     return ticket
+  }
+
+  /** 刷新页面后从后端恢复自己的票号（排队中 / 已叫号） */
+  let restoringTicket = false
+  async function restoreTicket() {
+    if (restoringTicket || activeTicket.value) return
+    restoringTicket = true
+    try {
+      const dto = await fetchMyTicket()
+      if (!dto || !dto.ticket_id) return
+      if (dto.status === 'calling' && dto.stall_id) {
+        myTickets.value.unshift({
+          id: dto.ticket_id,
+          code: dto.ticket_id,
+          bathhouseId: BATHHOUSE_ID,
+          bathhouseName: BATHHOUSE_NAME,
+          status: 'calling',
+          ahead: 0,
+          waitMinutes: 0,
+          createdAt: Date.now(),
+          assignedStall: dto.stall_id,
+        })
+        protectStall(BATHHOUSE_ID, dto.stall_id)
+      } else if (dto.status === 'queuing') {
+        const ahead = Math.max(0, (dto.position ?? 1) - 1)
+        myTickets.value.unshift({
+          id: dto.ticket_id,
+          code: dto.ticket_id,
+          bathhouseId: BATHHOUSE_ID,
+          bathhouseName: BATHHOUSE_NAME,
+          status: 'waiting',
+          ahead,
+          waitMinutes: ahead * 3,
+          createdAt: Date.now(),
+        })
+      }
+    } finally {
+      restoringTicket = false
+    }
   }
 
   /** 取消排队 */
@@ -117,13 +161,16 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
   }
 
   /**
-   * 扫码入场：把空闲隔间本地标记为「使用中」（传感器语义：门磁闭合=有人进入），
-   * 不产生排队票，仅联动 UI 状态，并加 5 秒仿真保护。
+   * 扫码入场：先调用后端核销（reserved → occupied，并校验票号归属），
+   * 成功后再把本地隔间标记为「使用中」。
+   * 核销失败（票号不匹配 / 隔间已被占用）会抛错，由页面提示用户。
    */
-  function startUseAt(bathhouseId: number, stallId: number | string) {
+  async function startUseAt(bathhouseId: number, stallId: number | string) {
     const b = bathhouses.value.find((x) => x.id === bathhouseId)
     const s = b?.stalls.find((x) => x.id === stallId || x.stallId === stallId)
-    if (s && s.status === 'idle') s.status = 'occupied'
+    await scanCheckin(s?.stallId ?? stallId)
+    // 后端核销后状态为 occupied；本地允许从 idle 或 reserved 进入占用
+    if (s && (s.status === 'idle' || s.status === 'reserved')) s.status = 'occupied'
     protectStall(bathhouseId, s?.stallId ?? stallId)
   }
 
@@ -157,6 +204,7 @@ export const useBathhouseStore = defineStore('bathhouse', () => {
     fetchBathhouse,
     takeTicketAt,
     reserveStallAt,
+    restoreTicket,
     cancelMyTicket,
     fetchRecommend,
     fetchForecast,

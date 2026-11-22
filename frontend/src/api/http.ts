@@ -23,9 +23,18 @@ http.interceptors.request.use((config) => {
 // 响应拦截：仅透传错误，不再弹统一 toast。
 // 所有业务请求都走 safeFetch（真实优先、失败回退 mock），
 // 后端未启动时由 safeFetch 静默回退，避免每次请求都弹「网络开小差了」。
+// 401 代表 JWT 过期或后端重置了密钥：广播事件，由 main.ts 统一清理会话并跳登录页。
 http.interceptors.response.use(
   (res) => res.data,
-  (err) => Promise.reject(err)
+  (err) => {
+    const status = (err as { response?: { status?: number } }).response?.status
+    const url = String((err as { config?: { url?: string } }).config?.url ?? '')
+    // /auth/* 的 401 属于账号密码错误，不走「会话过期」逻辑
+    if (status === 401 && !url.includes('/auth/')) {
+      window.dispatchEvent(new CustomEvent('auth:expired'))
+    }
+    return Promise.reject(err)
+  }
 )
 
 export default http

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { showToast, showSuccessToast, showConfirmDialog } from 'vant'
+import { showToast, showSuccessToast, showConfirmDialog, showFailToast } from 'vant'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { countStalls } from '@/mock/data'
 import { useBathhouseChannel } from '@/socket'
@@ -134,14 +134,14 @@ async function onStallTap(s: Stall) {
     return
   }
   try {
-    await store.reserveStallAt(id, s.id)
+    const ticket = await store.reserveStallAt(id, s.id)
     // 同步本地隔间状态为占用（带上 uid 用于去重预约提示）
     const local = stalls.value.find((x) => x.id === s.id || x.stallId === s.stallId)
     if (local) local.status = 'occupied'
-    showSuccessToast(`已预约 ${s.stallId}，请前往`)
+    showSuccessToast(`已预约 ${ticket.assignedStall ?? s.stallId}，请前往`)
     router.push('/queue')
-  } catch {
-    showToast('该隔间不可选')
+  } catch (e) {
+    showFailToast((e as Error).message || '该隔间不可选')
   }
 }
 
@@ -159,6 +159,8 @@ async function onQueue() {
     const t = await store.takeTicketAt(id)
     showSuccessToast(`取号成功 ${t.code}，到号将提醒`)
     router.push('/queue')
+  } catch (e) {
+    showFailToast((e as Error).message || '取号失败')
   } finally {
     queuing.value = false
   }
@@ -169,10 +171,14 @@ const repairShow = ref(false)
 
 /** 报修提交：上报后端 + 联动本地隔间标记「维修」 */
 async function onReported(stallId: number, type: FaultType, detail: string) {
-  const s = stalls.value.find((x) => x.id === stallId)
-  // 状态本地联动，保持网格实时反映
-  if (s) s.status = 'fault'
-  await store.submitFault(id, stallId, type, detail)
+  try {
+    await store.submitFault(id, stallId, type, detail)
+    // 只有在后端受理后才把本地状态改为维修，避免失败时误显示
+    const s = stalls.value.find((x) => x.id === stallId)
+    if (s) s.status = 'fault'
+  } catch (e) {
+    showFailToast((e as Error).message || '报修提交失败')
+  }
 }
 </script>
 
@@ -234,7 +240,7 @@ async function onReported(stallId: number, type: FaultType, detail: string) {
           <span class="dash-badge">{{ peakText }}</span>
         </div>
         <WaterPeakChart :usage="scaledWater" :height="120" />
-        <div class="dash-note">曲线振幅随本楼实时使用率变化（1 号楼为后端实时数据）</div>
+        <div class="dash-note">曲线振幅随本楼实时使用率变化（本楼为后端实时数据）</div>
       </div>
 
       <div class="dash-card">

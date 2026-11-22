@@ -113,7 +113,9 @@
 ## 🔗 二、 前后端联调与状态字典（前端必看）
 
 **1. 鉴权机制**
-- 登录接口：`POST /auth/login`（预置测试账号：`admin/admin123`，`user/user123`）
+- 登录接口：`POST /auth/login`
+- 管理员账号由后端首次启动时自动预置，可通过环境变量 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 覆盖；普通用户请先注册
+- 生产部署请设置 `JWT_SECRET`；未设置时每次启动随机生成，重启后旧 Token 自动失效
 - 前端需在 Header 中携带：`Authorization: Bearer <access_token>`
 
 **2. 隔间状态字典 (Status)**
@@ -130,6 +132,13 @@
 - `calling`：已叫号分配（显示去对应隔间扫码）
 - `expired`：超时作废（弹窗提示“超时未核销，请重新排队”）
 
+**4. 前端配置与容错（frontend/）**
+- 启动：`cd frontend && npm install && npm run dev`，默认 `http://localhost:5173`；`/api` 与 `/ws` 由 Vite 代理到 `http://localhost:8000`
+- 楼栋配置：`VITE_BATHHOUSE_ID` / `VITE_BATHHOUSE_NAME` / `VITE_BATHHOUSE_AREA`，默认 1 号楼（楼栋 id、名称集中在 `src/api/index.ts`）
+- WebSocket 地址：默认与页面同域并自动适配 `wss`；前后端分域部署时设置 `VITE_WS_URL`（支持 `ws(s)://host[/ws/stalls]` 或 `http(s)://host`）
+- 离线回退：后端不可达（连接失败或 5xx）时，登录/注册自动使用本地离线账号（密码以 SHA-256 摘要存于 localStorage，仅演示用途）；管理员入口不做离线回退
+- 会话过期：任意接口返回 401 时自动清除会话，管理员跳 `/admin/login`、普通用户跳 `/login`，并通过 `redirect` 保留原页面
+
 ---
 
 ## 📚 三、 核心 API 模块清单
@@ -139,13 +148,13 @@
 - `POST /auth/login` : 登录获取 Token
 
 ### 2. 用户操作模块 (需 User Token)
-- `POST /queue` : 排队取号（自动分配空闲隔间并设为 `reserved`）。
+- `POST /queue` : 排队取号（自动分配空闲隔间并设为 `reserved`）。请求体可带 `stall_id` 指定隔间；不带则按队列规则分配。重复取号返回 400。
 - `GET /queue/my_ticket` : 查询我的票号状态（含排队位次、分配隔间、超时提示）。
 - `POST /queue/cancel` : 取消排队或取消已分配隔间。
 - **`POST /queue/scan_checkin`** : **扫码核销核心接口**。前端传入扫到的 `stall_id`，后端执行：线下现场取号、进错门拦截、正常核销变 `occupied` 等全量逻辑。
 
 ### 3. 管理员模块 (需 Admin Token)
-- `GET /admin/feedback` / `GET /admin/pending` : 查工单与待处理。
+- `GET /admin/feedback` / `GET /admin/pending` : 查工单与待处理（均已校验管理员身份）。
 - `POST /admin/maintenance-all` / `POST /admin/cleaning-all` : 一键全局维修/清理。
 - `POST /admin/fault-done` / `POST /admin/cleaning-done` : 单个完结工单。
 

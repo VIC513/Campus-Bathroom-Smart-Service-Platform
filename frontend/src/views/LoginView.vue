@@ -123,7 +123,9 @@ async function submit() {
       }
       return
     }
-    showSuccessToast('登录成功')
+    // 离线演示登录：后端不可达，使用本地账号进入
+    if (store.current?.offline) showToast('后端未连接，已进入离线演示模式')
+    else showSuccessToast('登录成功')
     // redirect 仅接受站内绝对路径，避免数组/外部地址造成跳转异常或二次循环
     const rawRedirect = route.query.redirect
     const redirect =

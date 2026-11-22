@@ -1,8 +1,8 @@
-﻿﻿<script setup lang="ts">
+﻿﻿﻿﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { showConfirmDialog, showSuccessToast, showToast } from 'vant'
-import { getAdminOverview, adminFaultDone, adminToggleMaintenanceAll } from '@/api'
+import { showConfirmDialog, showSuccessToast, showToast, showFailToast } from 'vant'
+import { getAdminOverview, adminFaultDone, adminToggleMaintenanceAll, BATHHOUSE_NAME } from '@/api'
 import type { AdminOverview } from '@/api'
 import { useBathhouseStore } from '@/stores/bathhouse'
 import { useUserStore } from '@/stores/user'
@@ -30,7 +30,10 @@ const busy = ref(false)
 /** 隔间状态统计（单楼 1 号楼） */
 const idleCount = computed(() => overview.value?.stalls.filter((s) => s.status === 'idle').length ?? 0)
 const occupiedCount = computed(
-  () => overview.value?.stalls.filter((s) => s.status === 'occupied' || s.status === 'cleaning').length ?? 0
+  () =>
+    overview.value?.stalls.filter(
+      (s) => s.status === 'occupied' || s.status === 'reserved' || s.status === 'cleaning'
+    ).length ?? 0
 )
 const faultStalls = computed(() => overview.value?.stalls.filter((s) => s.status === 'fault') ?? [])
 /** 待处理工单（pending）与已处理工单 */
@@ -53,6 +56,9 @@ function fmtTime(t: number): string {
 async function reload() {
   try {
     overview.value = await getAdminOverview()
+  } catch (e) {
+    // 4xx（如管理员 token 过期）不再静默回退 mock，明确提示
+    showFailToast((e as Error).message || '后台数据加载失败')
   } finally {
     loading.value = false
   }
@@ -82,6 +88,8 @@ async function onFaultDone(stallId: string) {
     await adminFaultDone(stallId)
     showSuccessToast(`${stallId} 已完成维修`)
     await refreshAll()
+  } catch (e) {
+    showFailToast((e as Error).message || '操作失败')
   } finally {
     busy.value = false
   }
@@ -108,6 +116,8 @@ async function onToggleAll() {
     const action = await adminToggleMaintenanceAll()
     showSuccessToast(action === 'end' ? '已全部完成维修' : '已全部进入维修')
     await refreshAll()
+  } catch (e) {
+    showFailToast((e as Error).message || '操作失败')
   } finally {
     busy.value = false
   }
@@ -144,7 +154,7 @@ onMounted(reload)
     <div class="hero">
       <div>
         <div class="hero-title">管理后台</div>
-        <div class="hero-sub">1 号楼浴室 · 维修工单处理</div>
+        <div class="hero-sub">{{ BATHHOUSE_NAME }} · 维修工单处理</div>
       </div>
       <button class="refresh-btn" :disabled="loading" @click="onRefresh">
         <van-icon name="replay" />

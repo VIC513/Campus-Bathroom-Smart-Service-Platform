@@ -12,6 +12,8 @@ import random
 import redis
 import time
 import json
+import os
+import secrets
 import jwt
 import hashlib
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -28,8 +30,13 @@ app = FastAPI(
     version="4.0.0"
 )
 
-SECRET_KEY = "campus_bathroom_secret_key_2026"
+# JWT 密钥优先取环境变量；未配置时随机生成（进程重启后旧 Token 失效）
+SECRET_KEY = os.getenv("JWT_SECRET") or secrets.token_urlsafe(48)
 ALGORITHM = "HS256"
+
+# 管理员初始账号：仅用于本地演示，部署时务必通过环境变量覆盖
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 security = HTTPBearer(auto_error=False)
 class AuthModel(BaseModel):
     username: str
@@ -56,7 +63,8 @@ def require_admin(user: dict = Depends(get_current_user)):
 # ============================================================
 # 2. Redis 连接与 Key 定义
 # ============================================================
-r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+# 本机 Redis 5 不支持 RESP3 的 HELLO 握手，显式使用 RESP2，避免启动时报 unknown command `HELLO`
+r = redis.Redis(host="localhost", port=6379, decode_responses=True, protocol=2)
 QUEUE_KEY = "queue:female"  # 使用 Redis List 存排队队列
 
 # ============================================================
@@ -89,7 +97,7 @@ manager = ConnectionManager()
 # 4. 预设选项
 # ============================================================
 FAULT_REASONS = [
-    "水温异常", "门锁损坏", "花洒堵塞", "水压不足",
+    "水温异常", "门锁损坏", "花洒堵塞", "水压不足", "排水堵塞",
     "水温调节旋钮损坏", "无储物架或储物架损坏", "其他"
 ]
 CLEANING_REASONS = [
@@ -107,6 +115,8 @@ class Stall(BaseModel):
 
 class QueueRequest(BaseModel):
     user_id: str
+    # 预约指定隔间时传入（如 F07）；不传则按排队逻辑分配第一个空闲位
+    stall_id: Optional[str] = None
 
 class QueueResponse(BaseModel):
     ticket_id: str
@@ -139,6 +149,17 @@ def redis_init():
     if not r.exists("ticket_to_stall"):
         r.set("ticket_to_stall", json.dumps({}))
     print("[Redis] 初始化完成")
+
+def ensure_admin():
+    """首次启动时预置管理员账号，避免全新 Redis 下管理后台无人可登录"""
+    if r.exists(f"user:{ADMIN_USERNAME}"):
+        return
+    r.set(f"user:{ADMIN_USERNAME}", json.dumps({
+        "username": ADMIN_USERNAME,
+        "password": get_hash(ADMIN_PASSWORD),
+        "role": "admin",
+    }))
+    print(f"[Redis] 已预置管理员账号 {ADMIN_USERNAME}（可通过 ADMIN_PASSWORD 覆盖）")
 
 def get_stalls() -> List[dict]:
     return json.loads(r.get("stalls"))
@@ -210,6 +231,7 @@ def mark_all_feedback_done(feedback_type: str):
 @app.on_event("startup")
 async def startup_event():
     redis_init()
+    ensure_admin()
     simulator.attach_redis(r)
 
     async def on_update(stalls):
@@ -234,7 +256,8 @@ async def websocket_stalls(websocket: WebSocket):
 @app.post("/auth/register")
 def register(data: AuthModel):
     if r.exists(f"user:{data.username}"): raise HTTPException(400, "用户名已存在")
-    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": data.role}))
+    # 注册只允许创建普通用户：忽略客户端传入的 role，防止越权注册管理员
+    r.set(f"user:{data.username}", json.dumps({"username": data.username, "password": get_hash(data.password), "role": "user"}))
     return {"message": "注册成功"}
 
 @app.post("/auth/login")
@@ -402,8 +425,14 @@ def get_my_ticket(user: dict = Depends(require_user)):
             "message": f"📢 叫号啦！请前往 {stall_id} 号隔间"
         }
     else:
-        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}@app.get("/admin/feedback")
-def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None):
+        return {"status": "no_ticket", "message": "您的票已失效或使用完毕"}
+
+@app.get("/admin/feedback")
+def admin_get_feedback(
+    type: Optional[str] = None,
+    status: Optional[str] = None,
+    _: dict = Depends(require_admin),
+):
     result = get_feedbacks()
     if type:
         result = [f for f in result if f["type"] == type]
@@ -412,7 +441,7 @@ def admin_get_feedback(type: Optional[str] = None, status: Optional[str] = None)
     return result
 
 @app.get("/admin/pending")
-def admin_pending():
+def admin_pending(_: dict = Depends(require_admin)):
     stalls = get_stalls()
     feedbacks = get_feedbacks()
     return {
@@ -436,9 +465,21 @@ def join_queue(req: QueueRequest, user: dict = Depends(require_user)):
     r.set(f"user:{username}:ticket", ticket_id, ex=86400) 
 
     stalls = get_stalls()
-    idle_stalls = [s for s in stalls if s["status"] == "idle"]
-    if idle_stalls:
-        stall = idle_stalls[0]
+    # 指定隔间预约：先校验存在性与空闲状态，避免两个用户抢到同一格
+    stall = None
+    if req.stall_id:
+        stall = next((s for s in stalls if s["stall_id"] == req.stall_id), None)
+        if stall is None:
+            r.delete(f"user:{username}:ticket")
+            raise HTTPException(status_code=404, detail=f"隔间 {req.stall_id} 不存在")
+        if stall["status"] != "idle":
+            r.delete(f"user:{username}:ticket")
+            raise HTTPException(status_code=400, detail=f"隔间 {req.stall_id} 已被占用或预约，请选择其他隔间")
+    else:
+        idle_stalls = [s for s in stalls if s["status"] == "idle"]
+        stall = idle_stalls[0] if idle_stalls else None
+
+    if stall:
         # 【关键修改】变成 reserved（已预约），并记录分配时间
         stall["status"] = "reserved"
         stall["used_seconds"] = 0

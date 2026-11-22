@@ -1,3 +1,4 @@
+import axios from 'axios'
 import http from './http'
 import type {
   Bathhouse,
@@ -35,12 +36,18 @@ import {
 
 /**
  * 统一包装：先尝试真实请求，成功返回真实数据；
- * 失败（后端未启动 / 网络错误）时 console.warn 并回退到 mock 数据。
+ * 网络错误 / 后端未启动 / 5xx 时回退 mock，保证 UI 不白屏。
+ * 但 4xx 是后端明确的业务拒绝（重复取号、隔间已被占用、权限不足等），
+ * 必须原样抛给页面提示，绝不能伪造成功，否则会出现“假票”“假维修完成”。
  */
 async function safeFetch<T>(real: () => Promise<T>, mock: () => Promise<T>): Promise<T> {
   try {
     return await real()
   } catch (e) {
+    if (axios.isAxiosError(e) && e.response && e.response.status >= 400 && e.response.status < 500) {
+      const detail = (e.response.data as { detail?: unknown } | undefined)?.detail
+      throw new Error(typeof detail === 'string' ? detail : '操作未成功，请稍后重试')
+    }
     console.warn('[api] 真实请求失败，回退 mock：', e)
     return mock()
   }
@@ -52,10 +59,18 @@ export function setCurrentUserId(id: string) {
   currentUserId = id
 }
 
-/** 真实后端接入的楼栋（固定为 1 号楼：与模拟列表中的「1 号楼」占位对齐，其余 30 栋走 mock） */
-const BATHHOUSE_NAME = '1 号楼浴室'
-const BATHHOUSE_AREA = '宿舍 1 栋'
-const BATHHOUSE_ID = 1
+/**
+ * 后端接入的楼栋配置。
+ * 默认 1 号楼；可通过 .env 覆盖，避免楼栋 id / 名称散落在各页面：
+ *   VITE_BATHHOUSE_ID=2
+ *   VITE_BATHHOUSE_NAME=2 号楼浴室
+ *   VITE_BATHHOUSE_AREA=宿舍 2 栋
+ */
+export const BATHHOUSE_ID = Number(import.meta.env.VITE_BATHHOUSE_ID || 1)
+export const BATHHOUSE_NAME =
+  (import.meta.env.VITE_BATHHOUSE_NAME as string | undefined) || `${BATHHOUSE_ID} 号楼浴室`
+const BATHHOUSE_AREA =
+  (import.meta.env.VITE_BATHHOUSE_AREA as string | undefined) || `宿舍 ${BATHHOUSE_ID} 栋`
 
 /** 是否为真实后端接入的楼栋（仅 1 号楼） */
 const isRealBuilding = (id: number) => id === BATHHOUSE_ID
@@ -235,6 +250,38 @@ export async function cancelTicket(id: string): Promise<boolean> {
   return safeFetch(
     async () => {
       await http.post(`/queue/cancel?ticket_id=${encodeURIComponent(id)}`)
+      return true
+    },
+    () => Promise.resolve(true)
+  )
+}
+
+/** 我的票号状态（用于刷新后恢复排队/叫号） */
+export interface MyTicketDto {
+  status: 'no_ticket' | 'expired' | 'queuing' | 'calling'
+  ticket_id?: string
+  position?: number
+  stall_id?: string
+  message?: string
+}
+
+/**
+ * 查询当前登录用户的票号。
+ * 这里不回退 mock：票号只存在于后端，伪造没有意义；后端不可用时返回 null 即可。
+ */
+export async function fetchMyTicket(): Promise<MyTicketDto | null> {
+  try {
+    return (await http.get('/queue/my_ticket')) as MyTicketDto
+  } catch {
+    return null
+  }
+}
+
+/** 扫码核销：后端把 reserved 置为 occupied，并校验票号与隔间是否匹配 */
+export async function scanCheckin(stallId: number | string): Promise<boolean> {
+  return safeFetch(
+    async () => {
+      await http.post('/queue/scan_checkin', { stall_id: String(stallId) })
       return true
     },
     () => Promise.resolve(true)

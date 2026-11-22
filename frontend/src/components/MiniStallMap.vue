@@ -18,6 +18,7 @@ const zones = computed(() => {
 
 const dotCls: Record<StallStatus, string> = {
   idle: 'd-free',
+  reserved: 'd-used',
   occupied: 'd-used',
   cleaning: 'd-repair',
   fault: 'd-off',
