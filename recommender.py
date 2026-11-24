@@ -9,7 +9,33 @@
   -> 只有当“步行时间 + 新区域等待时间”显著小于当前等待时间时才推荐
 """
 
+import json
 import math
+import os
+
+# 默认区域配置（演示口径）：walk_min 为步行分钟数，stalls 为隔间数
+# 正式部署时应替换为真实测距结果：宿舍楼 -> 各浴室的步行时间（分钟）
+DEFAULT_AREAS = {
+    "A": {"walk_min": 0, "stalls": 15},
+    "B": {"walk_min": 3, "stalls": 10},
+    "C": {"walk_min": 8, "stalls": 20},
+}
+
+
+def load_areas(config_path: str, key: str = "areas", fallback: dict = None) -> dict:
+    """
+    从 JSON 配置文件读取区域配置；文件或键不存在时返回 fallback（默认 DEFAULT_AREAS）。
+    配置格式: {"areas": {"A": {"walk_min": 0, "stalls": 15}, "B": {...}}}
+    """
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        areas = cfg.get(key)
+        if isinstance(areas, dict) and areas:
+            return areas
+    except (OSError, ValueError):
+        pass
+    return dict(fallback if fallback is not None else DEFAULT_AREAS)
 
 
 class CrossAreaRecommender:
@@ -27,6 +53,11 @@ class CrossAreaRecommender:
         self.areas = areas
         self.walk_threshold = walk_threshold_min
         self.min_improve = min_improve_min
+
+    @classmethod
+    def from_config(cls, config_path: str, **kwargs):
+        """用 JSON 中的 areas 配置构造推荐器"""
+        return cls(load_areas(config_path), **kwargs)
 
     # ---------- 单个区域的综合代价 ----------
     def _cost(self, wait_min: float, walk_min: float) -> float:

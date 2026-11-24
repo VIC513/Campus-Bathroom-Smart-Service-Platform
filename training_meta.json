@@ -1,0 +1,210 @@
+{
+  "n_train": 25081,
+  "n_val": 6271,
+  "n_train_groups": {
+    "base": 18298,
+    "peak": 6783
+  },
+  "n_val_groups": {
+    "base": 4575,
+    "peak": 1696
+  },
+  "metrics_val": {
+    "rule": {
+      "n": 6271,
+      "mae": 3.2163,
+      "rmse": 7.7081,
+      "bias": 3.0997
+    },
+    "statistical": {
+      "n": 6271,
+      "mae": 0.8574,
+      "rmse": 1.8167,
+      "bias": -0.1376
+    },
+    "lightgbm": {
+      "n": 6271,
+      "mae": 0.7028,
+      "rmse": 1.5001,
+      "bias": -0.0636
+    }
+  },
+  "mae_rule": 3.2163,
+  "mae_stat": 0.8574,
+  "mae_ml": 0.7028,
+  "ml_gain_vs_stat_min": 0.1546,
+  "default_layer": "ml",
+  "layer_selection_rule": "ML 的 MAE 比统计层低至少 0.02 分钟时用 ML，否则用统计层",
+  "backend": "LightGBM",
+  "feature_cols": [
+    "queue_len",
+    "free_stalls",
+    "load_per_stall",
+    "hour_seg",
+    "is_peak",
+    "weekend",
+    "gender_F"
+  ],
+  "avg_duration_min": 20.69,
+  "total_stalls": 15,
+  "max_wait_min": 60.0,
+  "queue_train_max": 47.0,
+  "high_load_q_ge6": {
+    "rule": {
+      "n": 1070,
+      "mae": 16.1754,
+      "rmse": 18.4311,
+      "bias": 16.1739
+    },
+    "statistical": {
+      "n": 1070,
+      "mae": 3.0954,
+      "rmse": 3.9166,
+      "bias": -0.7493
+    },
+    "lightgbm": {
+      "n": 1070,
+      "mae": 2.443,
+      "rmse": 3.0869,
+      "bias": -0.3758
+    }
+  },
+  "groups": {
+    "base": {
+      "n": 4575,
+      "rule": {
+        "n": 4575,
+        "mae": 0.7447,
+        "rmse": 1.7469,
+        "bias": 0.6176
+      },
+      "statistical": {
+        "n": 4575,
+        "mae": 0.5141,
+        "rmse": 1.2044,
+        "bias": 0.1223
+      },
+      "lightgbm": {
+        "n": 4575,
+        "mae": 0.398,
+        "rmse": 0.9179,
+        "bias": 0.0577
+      },
+      "high_load_q_ge6": {
+        "rule": {
+          "n": 105,
+          "mae": 6.6849,
+          "rmse": 7.1531,
+          "bias": 6.6849
+        },
+        "statistical": {
+          "n": 105,
+          "mae": 5.0205,
+          "rmse": 5.4137,
+          "bias": 5.0047
+        },
+        "lightgbm": {
+          "n": 105,
+          "mae": 2.0068,
+          "rmse": 2.423,
+          "bias": 1.2123
+        }
+      }
+    },
+    "peak": {
+      "n": 1696,
+      "rule": {
+        "n": 1696,
+        "mae": 9.8835,
+        "rmse": 14.5415,
+        "bias": 9.7954
+      },
+      "statistical": {
+        "n": 1696,
+        "mae": 1.7835,
+        "rmse": 2.8794,
+        "bias": -0.8386
+      },
+      "lightgbm": {
+        "n": 1696,
+        "mae": 1.5251,
+        "rmse": 2.4592,
+        "bias": -0.3908
+      },
+      "high_load_q_ge6": {
+        "rule": {
+          "n": 965,
+          "mae": 17.208,
+          "rmse": 19.264,
+          "bias": 17.2063
+        },
+        "statistical": {
+          "n": 965,
+          "mae": 2.8859,
+          "rmse": 3.7175,
+          "bias": -1.3753
+        },
+        "lightgbm": {
+          "n": 965,
+          "mae": 2.4904,
+          "rmse": 3.1507,
+          "bias": -0.5486
+        }
+      }
+    }
+  },
+  "feature_importance_split": {
+    "queue_len": 53.21,
+    "free_stalls": 2.46,
+    "load_per_stall": 11.69,
+    "hour_seg": 12.45,
+    "is_peak": 5.77,
+    "weekend": 14.44,
+    "gender_F": 0.0
+  },
+  "feature_importance_gain": {
+    "queue_len": 74.43,
+    "free_stalls": 0.35,
+    "load_per_stall": 24.85,
+    "hour_seg": 0.17,
+    "is_peak": 0.06,
+    "weekend": 0.15,
+    "gender_F": 0.0
+  },
+  "metrics_test": {
+    "rule": {
+      "n": 3292,
+      "mae_min": 4.8854,
+      "rmse_min": 8.3894,
+      "bias_min": 4.7922
+    },
+    "statistical": {
+      "n": 3292,
+      "mae_min": 1.4069,
+      "rmse_min": 2.3604,
+      "bias_min": 0.755
+    },
+    "lightgbm": {
+      "n": 3292,
+      "mae_min": 1.1497,
+      "rmse_min": 2.0153,
+      "bias_min": 0.2968
+    },
+    "predict()": {
+      "n": 3292,
+      "mae_min": 1.15,
+      "rmse_min": 2.0159,
+      "bias_min": 0.3001
+    }
+  },
+  "independent_test": {
+    "source": "sim_test_logs.csv",
+    "generated_by": "simulator.py --scenario test --peak-share 0.6 --seed 20261125 --users 300 --days 20",
+    "n": 3292,
+    "note": "未参与训练与模型选择，仅用于最终评价"
+  },
+  "version": "v1.2.0",
+  "model_file": "wait_time_model_v1.2.0.pkl",
+  "canonical_alias": "wait_time_model.pkl",
+  "ablation_best": "D_删除两者(7特征,正式)"
+}

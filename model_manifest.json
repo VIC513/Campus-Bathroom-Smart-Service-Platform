@@ -1,0 +1,59 @@
+{
+  "algorithm_version": "v1.2.0",
+  "generated_at": "2026-11-24T19:50:30",
+  "python": "3.14.6",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "dependencies": {
+    "numpy": "2.4.6",
+    "pandas": "3.0.3",
+    "scikit-learn": "1.9.0",
+    "joblib": "1.5.3",
+    "lightgbm": "4.7.0"
+  },
+  "serialization": "joblib (pickle)，保存完整三层对象（规则/统计/LightGBM）",
+  "custom_classes": [
+    "wait_time_predictor.WaitTimePredictor",
+    "wait_time_predictor.RuleBasedWaitEstimator",
+    "wait_time_predictor.StatisticalCalibrator",
+    "wait_time_predictor.MLWaitModel",
+    "anomaly_detector.AnomalyDetector"
+  ],
+  "models": [
+    {
+      "file": "wait_time_model_v1.2.0.pkl",
+      "role": "wait_time_predictor",
+      "sha256": "dc9333891d972566a330d55c58d6b4bae70fde1b246f584ad4804af0cebcf87d",
+      "size_bytes": 962546
+    },
+    {
+      "file": "anomaly_model_v1.2.0.pkl",
+      "role": "anomaly_detector",
+      "sha256": "172ea85bea8bd752401473057d6bb9a871517f6c133a556a700f064a2de0b242",
+      "size_bytes": 1217074
+    }
+  ],
+  "canonical_alias": {
+    "wait_time_model.pkl": "wait_time_model_v1.2.0.pkl",
+    "anomaly_model.pkl": "anomaly_model_v1.2.0.pkl"
+  },
+  "feature_cols": [
+    "queue_len",
+    "free_stalls",
+    "load_per_stall",
+    "hour_seg",
+    "is_peak",
+    "weekend",
+    "gender_F"
+  ],
+  "commands": {
+    "generate_train_data": "python simulator.py --mode export --scenario base --users 300 --days 90 --seed 20261124 --prefix sim_base",
+    "generate_peak_data": "python simulator.py --mode export --scenario peak --users 300 --days 90 --seed 20261124 --prefix sim_peak",
+    "generate_test_data": "python simulator.py --mode export --scenario test --users 300 --days 20 --peak-share 0.6 --seed 20261125 --prefix sim_test",
+    "train": "python train_pipeline.py",
+    "inference": "python -c \"from wait_time_predictor import WaitTimePredictor; p=WaitTimePredictor().load('wait_time_model.pkl'); print(p.predict(queue_len=10, hour=21, free_stalls=0))\""
+  },
+  "notes": [
+    "模型文件与 Python/依赖版本强绑定，跨版本加载失败时请重训或使用 wait_time_predictor.rule_fallback_wait() 降级",
+    "canonical 文件仅用于兼容既有适配层路径，内容与版本化文件一致"
+  ]
+}

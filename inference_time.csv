@@ -1,0 +1,9 @@
+﻿layer,mode,n_calls,total_ms,ms_per_call,rows_per_sec
+rule,single,200,6.129,0.0306,32631.2
+statistical,single,200,67.472,0.3374,2964.2
+lightgbm,single,200,157.589,0.7879,1269.1
+predict(),single,200,1614.643,8.0732,123.9
+rule,batch,3292,0.041,1.2e-05,81083736.7
+statistical,batch,3292,1162.115,0.353012,2832.8
+lightgbm,batch,3292,5.593,0.001699,588550.8
+predict(),batch,3292,15.073,0.004579,218399.4

@@ -1,0 +1,4 @@
+﻿model,backend,n_features,features,n_test,mae_min,rmse_min,bias_min,high_load_mae_min,note
+旧版v1.1_9特征(temperature+avg_duration),LightGBM,9,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F|temperature|avg_duration,3292,1.2267,2.1378,0.4699,2.7982,旧版模型包已被覆盖，此处按 v1.1 特征口径在同一数据上复现
+"旧版v1.1_10特征(+is_fault_area,泄漏)",LightGBM,10,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F|temperature|avg_duration|is_fault_area,3292,1.2266,2.1374,0.4731,2.7912,旧版模型包已被覆盖，此处按 v1.1 特征口径在同一数据上复现
+新版v1.2_7特征(正式),LightGBM,7,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F,3292,1.1497,2.0153,0.2968,2.5519,旧版模型包已被覆盖，此处按 v1.1 特征口径在同一数据上复现

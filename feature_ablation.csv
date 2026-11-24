@@ -1,0 +1,7 @@
+﻿candidate,backend,n_features,features,n_test,mae_min,rmse_min,bias_min,high_load_mae_min
+A_完整9特征(temperature+avg_duration),LightGBM,9,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F|temperature|avg_duration,3292,1.2267,2.1378,0.4699,2.7982
+B_删除temperature(8特征),LightGBM,8,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F|avg_duration,3292,1.2206,2.1317,0.4618,2.7522
+C_删除avg_duration(8特征),LightGBM,8,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F|temperature,3292,1.1548,2.0256,0.2961,2.5771
+"D_删除两者(7特征,正式)",LightGBM,7,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F,3292,1.1497,2.0153,0.2968,2.5519
+E_再删除gender_F(6特征),LightGBM,6,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend,3292,1.1497,2.0153,0.2968,2.5519
+"F_加入is_fault_area(8特征,仅泄漏分析)",LightGBM,8,queue_len|free_stalls|load_per_stall|hour_seg|is_peak|weekend|gender_F|is_fault_area,3292,1.1503,2.0162,0.2992,2.5537

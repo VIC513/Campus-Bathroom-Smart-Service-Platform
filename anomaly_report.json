@@ -1,0 +1,80 @@
+{
+  "algorithm_version": "v1.2.0",
+  "python": "3.14.6",
+  "trained_at": "2026-11-24T19:50:30",
+  "model_file": "anomaly_model_v1.2.0.pkl",
+  "data_source": "sim_base_logs.csv + sim_peak_logs.csv 中 is_fault=False 的会话",
+  "n_train_normal": 29579,
+  "n_eval": 3292,
+  "n_eval_fault": 114,
+  "n_eval_normal": 3178,
+  "features": [
+    "duration_min",
+    "water_usage_l",
+    "hour"
+  ],
+  "contamination": 0.01,
+  "metrics": {
+    "with_water": {
+      "recall": 0.0175,
+      "false_positive_rate": 0.0107
+    },
+    "without_water_degraded": {
+      "recall": 0.0088,
+      "false_positive_rate": 0.0022
+    },
+    "duration_only_rule": {
+      "recall": 0.0088,
+      "false_positive_rate": 0.0009,
+      "rule": "duration>60min 或 duration>均值+3σ"
+    }
+  },
+  "standard_examples": [
+    {
+      "name": "正常会话",
+      "duration_min": 15.0,
+      "water_usage_l": 80.0,
+      "hour": 20,
+      "is_anomaly": false,
+      "reason": "正常",
+      "score": -0.43862065354239743,
+      "degraded": false
+    },
+    {
+      "name": "超长占用",
+      "duration_min": 75.0,
+      "water_usage_l": 90.0,
+      "hour": 21,
+      "is_anomaly": true,
+      "reason": "超长占用(75min > 60min); 时长离群(75min > μ+3σ=50.1)",
+      "score": -0.6495171254472273,
+      "degraded": false
+    },
+    {
+      "name": "用水量异常偏低",
+      "duration_min": 20.0,
+      "water_usage_l": 2.0,
+      "hour": 20,
+      "is_anomaly": true,
+      "reason": "用水量异常偏低，疑似阀门故障",
+      "score": -0.5307004180835354,
+      "degraded": false
+    },
+    {
+      "name": "用水量异常偏高",
+      "duration_min": 18.0,
+      "water_usage_l": 600.0,
+      "hour": 19,
+      "is_anomaly": true,
+      "reason": "用水量异常偏高，疑似漏水",
+      "score": -0.6027082213467029,
+      "degraded": false
+    }
+  ],
+  "limitations": [
+    "用水量为仿真生成值，线上暂无真实数据源，不能作为正式故障判定依据",
+    "水温异常、门锁损坏等用户感知类故障无法由传感器特征识别",
+    "线上故障应以用户反馈为唯一判定依据，本模块仅用于离线验证与内部巡检"
+  ],
+  "integration_policy": "本轮保留模型但不接入正式告警接口；缺少用水量时 water_usage_l=None 进入降级模式，或使用仅时长规则方案"
+}

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 模块归属: 数据 / 仿真数据生成  |  版本: v1.0.0  |  日期: 2026-11-20
+# 模块归属: 数据 / 仿真数据生成  |  版本: v1.1.0  |  日期: 2026-11-24
 """
 基于女生问卷统计的校园浴室数据仿真器
 依赖: pip install numpy psycopg2-binary redis
@@ -12,7 +12,14 @@
   history   批量生成历史数据（票据/日志/传感器/反馈），写入 PostgreSQL
   realtime  实时状态模拟，定时改写 Redis 中各隔间状态
   peak      一键触发晚高峰（80% 隔间占用），用于答辩演示
+  export    纯内存仿真并导出 CSV（无需数据库/Redis），供训练流水线使用
   demo      无需数据库/Redis，直接打印 5 条样本日志与状态机示例（自检用）
+
+v1.1.0:
+  · 修正取号时刻口径：排队用户的 idle_stalls_at_start 记录为 0（旧版记为 1）
+  · 新增排队事件记录（含放弃者的容忍时长与实际等待），支持右删失分析
+  · 新增 --scenario peak 压力场景（75% 到访集中 21:00-23:00）
+  · 新增 --mode export，直接导出训练用 CSV
 """
 
 import argparse
@@ -121,9 +128,11 @@ class BathSimulator:
         self.fault_hours = tuple(
             config.get('fault_duration_hours', list(FAULT_DURATION_RANGE)))
 
-        # 仿真中间结果（内存态，最后批量写库）
+        # 仿真中间结果（内存态，最后批量写库 / 导出 CSV）
         self._logs = []
         self._tickets = []
+        self._queue_events = []         # 每次到达的排队事件（含放弃者）
+        self._scenario = 'base'
         self._ticket_seq = 0            # 票据编号自增（含放弃者）
         self._abandoned = 0             # 放弃排队人数
         self._feedbacks = []            # 用户报修记录（故障唯一来源）
@@ -366,16 +375,60 @@ class BathSimulator:
         self._abandoned += 1
 
     def _pop_servable(self, queue, now):
-        """从队首取一个仍在容忍范围内的人；超时者按放弃处理"""
+        """从队首取一个仍在容忍范围内的人；超时者按放弃处理并回填排队事件"""
         while queue:
-            uid, arrival_t, q_len, tol = queue[0]
-            if (now - arrival_t).total_seconds() > tol:
+            person = queue[0]
+            waited = (now - person['arrival']).total_seconds()
+            if waited > person['tol']:
                 queue.pop(0)
-                self._abandon(uid, arrival_t, tol)
+                self._abandon(person['uid'], person['arrival'], person['tol'])
+                self._finish_event(person['ev'], 'abandoned', waited)
                 continue
             queue.pop(0)
-            return uid, arrival_t, q_len
+            return person
         return None
+
+    def _finish_event(self, ev_idx, outcome, waited_seconds, stall_id=None):
+        """回填一条排队事件的最终结果（completed / abandoned / served）"""
+        ev = self._queue_events[ev_idx]
+        ev['outcome'] = outcome
+        ev['waited_seconds'] = round(float(waited_seconds), 1)
+        if stall_id is not None:
+            ev['stall_id'] = stall_id
+
+    def _assign_queued(self, person, now, idle_stalls, is_winter, finishing):
+        """
+        给队首用户分配一个刚释放（或当前空闲）的隔间。
+        注意：排队用户“取号时刻”的空闲隔间数为 0，不能用分配时刻的 1 代替，
+        否则训练数据永远看不到 free_stalls=0 的真实高负载组合。
+        """
+        uid, arrival_t, q_len, ev_idx = (person['uid'], person['arrival'],
+                                         person['q_len'], person['ev'])
+        stall = idle_stalls.pop()
+        assign_t = max(now, arrival_t)
+        log = self._emit(arrival_t, assign_t, stall, q_len, 0, uid, is_winter)
+        heapq.heappush(finishing, (log['end_time'], stall, log['duration_seconds']))
+        self._finish_event(ev_idx, 'completed',
+                           (assign_t - arrival_t).total_seconds(), stall)
+
+    def _make_arrivals(self, day_start, user_count, peak_share=0.0):
+        """
+        生成当日到访列表。
+        peak_share > 0 时为压力场景：该比例的到访集中在 21:00-23:00。
+        """
+        out = []
+        for uid in range(1, user_count + 1):
+            if peak_share > 0 and random.random() < peak_share:
+                hour = random.choice([21, 22])
+            else:
+                hour = self.sample_hour()
+            out.append((day_start + timedelta(
+                hours=hour,
+                minutes=random.randint(0, 59),
+                seconds=random.randint(0, 59),
+            ), uid))
+        out.sort(key=lambda x: x[0])
+        return out
 
     # ---------- 记录一条日志及其排队票据（内存态） ----------
     def _emit(self, arrival_t, assign_t, stall, q_len, free_n, uid, is_winter):
@@ -399,58 +452,65 @@ class BathSimulator:
         ))
         return log
 
-    # ---------- 批量生成历史数据（DES 事件驱动） ----------
-    def generate_history(self, user_count=300, days=90):
+    # ---------- 批量生成历史数据（DES 事件驱动，纯内存） ----------
+    def simulate(self, user_count=300, days=90, scenario='base', seed=20261124,
+                 peak_share=None):
         """
-        事件驱动仿真 (Discrete-Event Simulation)：
+        事件驱动仿真 (Discrete-Event Simulation)，结果只保存在内存：
           · 按天循环，每天从 00:00 → 24:00 按分钟推进
           · 每天为这 300 人各生成 1 次到访，到达小时由女生问卷时段权重抽样
             （权重本身已含高峰信息，不再重复乘高峰系数）
           · 隔间按 sample_duration 完成后释放 → 队首自动分配
           · wait_seconds 由 (assign_time - arrival_time) 涌现，不是公式
+          · 每次到达都记录一条排队事件（含放弃者），用于分析右删失
           · 故障不参与生成过程，全部在生成完成后由用户反馈（feedbacks）决定
+
+        scenario:
+          base  日常场景，按问卷时段权重到达
+          peak  压力场景，peak_share（默认 75%）的到访集中在 21:00-23:00
+          test  独立测试场景，仅用于最终评价，不参与训练
+        peak_share:
+          None 时按场景取默认值（peak=0.75，其余=0）；显式传入可覆盖，
+          用于生成与训练集分布不同的独立测试场景。
+        seed:
+          随机种子；测试场景应使用与训练不同的种子，保证不重叠。
+        返回: (logs, queue_events, tickets)
         """
-        if not self.pg:
-            raise RuntimeError("需要 PostgreSQL 连接")
-        cur = self.pg.cursor()
+        random.seed(seed)
+        np.random.seed(seed)
 
         self._logs = []
         self._tickets = []
+        self._queue_events = []
         self._ticket_seq = 0
         self._abandoned = 0
         self._feedbacks = []
         self._anomaly_episodes = []
+        self._tol_cache = {}
+        self._scenario = scenario
+        if peak_share is None:
+            peak_share = 0.75 if scenario == 'peak' else 0.0
+        peak_share = float(np.clip(peak_share, 0.0, 1.0))
 
         # 从今天 00:00 往前推 days 天
         today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-
         mean_dur = self._mean_duration_min()
-        print(f"[Simulator] 规模: {user_count} 人/天 × {days} 天 = "
-              f"{user_count * days} 人次 | 15 隔间 | 平均时长 {mean_dur:.1f}min")
+        print(f"[Simulator] 场景={scenario} 规模: {user_count} 人/天 × {days} 天 = "
+              f"{user_count * days} 人次 | 15 隔间 | 平均时长 {mean_dur:.1f}min | "
+              f"集中高峰占比 {peak_share:.0%}")
 
         for day_offset in range(days):
             day_start = today - timedelta(days=day_offset)
             day_end = day_start + timedelta(days=1)
             is_winter = day_start.month in (11, 12, 1, 2, 3)
 
-            # 当天全部到达：每个用户各 1 次，小时按问卷时段权重抽样
-            arrivals = sorted(
-                [
-                    (day_start + timedelta(
-                        hours=self.sample_hour(),
-                        minutes=random.randint(0, 59),
-                        seconds=random.randint(0, 59),
-                    ), uid)
-                    for uid in range(1, user_count + 1)
-                ],
-                key=lambda x: x[0],
-            )
+            arrivals = self._make_arrivals(day_start, user_count, peak_share)
 
             # ----- DES 状态 -----
             t = day_start                          # 当前仿真时钟
             idle_stalls = set(self.stalls)          # 空闲隔间集合
             finishing = []                          # 最小堆: (end_time, stall_id, duration_seconds)
-            queue = []                              # 等待队列: [user_id, arrival_time, queue_len_seen, tolerance]
+            queue = []                              # 等待队列: dict(uid/arrival/q_len/tol/ev)
             ptr = 0                                 # 当日到达列表游标
 
             while t < day_end:
@@ -462,13 +522,8 @@ class BathSimulator:
                         person = self._pop_servable(queue, end_t)
                         if person is None:
                             break
-                        uid, arrival_t, q_len = person
-                        stall = idle_stalls.pop()
-                        assign_t = max(end_t, arrival_t)
-                        log = self._emit(arrival_t, assign_t, stall, q_len,
-                                         len(idle_stalls) + 1, uid, is_winter)
-                        heapq.heappush(finishing, (
-                            log['end_time'], stall, log['duration_seconds']))
+                        self._assign_queued(person, end_t, idle_stalls,
+                                            is_winter, finishing)
 
                 # 2) 处理本分钟内的到达
                 minute_end = t + timedelta(minutes=1)
@@ -477,6 +532,15 @@ class BathSimulator:
                     ptr += 1
                     q_len = len(queue)
                     free_n = len(idle_stalls)
+                    ev_idx = len(self._queue_events)
+                    self._queue_events.append({
+                        'arrival_time': arrival_t, 'user_id': uid,
+                        'queue_len_at_arrival': q_len,
+                        'free_stalls_at_arrival': free_n,
+                        'tolerance_seconds': None,
+                        'outcome': None, 'waited_seconds': None,
+                        'stall_id': None, 'scenario': scenario,
+                    })
                     if idle_stalls:
                         # 有空闲隔间：直接入场，零等待
                         stall = idle_stalls.pop()
@@ -484,13 +548,19 @@ class BathSimulator:
                                          free_n, uid, is_winter)
                         heapq.heappush(finishing, (
                             log['end_time'], stall, log['duration_seconds']))
+                        self._queue_events[ev_idx]['tolerance_seconds'] = \
+                            round(self.tolerance_seconds(uid), 1)
+                        self._finish_event(ev_idx, 'served', 0.0, stall)
                     else:
                         # 无空闲：照常取号排队；Q5 中"零容忍"的人看到满员直接走
                         tol = self.tolerance_seconds(uid)
+                        self._queue_events[ev_idx]['tolerance_seconds'] = round(tol, 1)
                         if tol <= 0:
                             self._abandon(uid, arrival_t, 0.0)
+                            self._finish_event(ev_idx, 'abandoned', 0.0)
                         else:
-                            queue.append([uid, arrival_t, q_len, tol])
+                            queue.append({'uid': uid, 'arrival': arrival_t,
+                                          'q_len': q_len, 'tol': tol, 'ev': ev_idx})
 
                 # 3) 下一分钟
                 t = minute_end
@@ -502,13 +572,7 @@ class BathSimulator:
                     person = self._pop_servable(queue, t)
                     if person is None:
                         break
-                    uid, arrival_t, q_len = person
-                    stall = idle_stalls.pop()
-                    assign_t = max(t, arrival_t)
-                    log = self._emit(arrival_t, assign_t, stall, q_len,
-                                     len(idle_stalls) + 1, uid, is_winter)
-                    heapq.heappush(finishing, (
-                        log['end_time'], stall, log['duration_seconds']))
+                    self._assign_queued(person, t, idle_stalls, is_winter, finishing)
                 elif finishing:
                     end_t, freed_stall, _dur = heapq.heappop(finishing)
                     t = max(t, end_t)
@@ -518,13 +582,24 @@ class BathSimulator:
 
             # 仍未等到（超过容忍度或营业时间结束）→ 放弃
             while queue:
-                uid, arrival_t, q_len, tol = queue.pop(0)
-                self._abandon(uid, arrival_t, tol)
+                person = queue.pop(0)
+                waited = (t - person['arrival']).total_seconds()
+                self._abandon(person['uid'], person['arrival'], person['tol'])
+                self._finish_event(person['ev'], 'abandoned', waited)
 
             if (day_offset + 1) % 10 == 0 or day_offset == days - 1:
                 print(f"[Simulator] 已推进 {day_offset + 1}/{days} 天，"
                       f"累计日志 {len(self._logs)} 条，"
                       f"放弃 {self._abandoned} 人次")
+
+        return self._logs, self._queue_events, self._tickets
+
+    # ---------- 批量生成历史数据并写入数据库 ----------
+    def generate_history(self, user_count=300, days=90, scenario='base'):
+        if not self.pg:
+            raise RuntimeError("需要 PostgreSQL 连接")
+        cur = self.pg.cursor()
+        self.simulate(user_count=user_count, days=days, scenario=scenario)
 
         # ----- 故障判定：只由用户反馈上报确定（不读传感器、不做算法判定） -----
         self._assign_faults()
@@ -535,6 +610,53 @@ class BathSimulator:
 
         print(f"[Simulator] 完成：日志 {len(self._logs)} 条 -> shower_logs")
         self.print_stats()
+
+    # ---------- 导出为 CSV（无需 PostgreSQL / Redis） ----------
+    def export_csv(self, out_dir, prefix=None):
+        """
+        把内存中的仿真结果导出为 CSV，供训练流水线直接读取：
+          <prefix>_logs.csv          每条完成的洗浴记录（含取号时刻特征与真实等待标签）
+          <prefix>_queue_events.csv  每次到达的排队事件（含放弃者与容忍时长，用于删失分析）
+        """
+        import pandas as pd
+
+        os.makedirs(out_dir, exist_ok=True)
+        prefix = prefix or f"sim_{self._scenario}"
+        log_rows = []
+        for log in self._logs:
+            log_rows.append({
+                'stall_id': log['stall_id'], 'user_id': log['user_id'],
+                'gender': log['gender'], 'start_time': log['start_time'],
+                'end_time': log['end_time'],
+                'duration_seconds': log['duration_seconds'],
+                'water_usage': log['water_usage'],
+                'hour_of_day': log['hour_of_day'],
+                'day_of_week': log['day_of_week'],
+                'is_weekend': log['is_weekend'],
+                'queue_length_at_start': log['queue_length_at_start'],
+                'idle_stalls_at_start': log['idle_stalls_at_start'],
+                'wait_seconds': log['wait_seconds'],
+                'temperature': log['temperature'],
+                'is_fault': log['is_fault'], 'fault_type': log['fault_type'],
+                'ticket_id': log['ticket_id'],
+                'data_source': 'simulated',
+                'scenario': self._scenario,
+            })
+        logs_path = os.path.join(out_dir, f"{prefix}_logs.csv")
+        ev_path = os.path.join(out_dir, f"{prefix}_queue_events.csv")
+        pd.DataFrame(log_rows).to_csv(logs_path, index=False, encoding='utf-8-sig')
+        pd.DataFrame(self._queue_events).to_csv(
+            ev_path, index=False, encoding='utf-8-sig')
+
+        n = len(log_rows)
+        n_q = sum(1 for l in log_rows if l['queue_length_at_start'] > 0)
+        n_f0 = sum(1 for l in log_rows if l['idle_stalls_at_start'] == 0)
+        n_ab = sum(1 for e in self._queue_events if e['outcome'] == 'abandoned')
+        print(f"[Simulator] 已导出 {n} 条洗浴日志 -> {logs_path}")
+        print(f"[Simulator] 已导出 {len(self._queue_events)} 条排队事件 -> {ev_path}")
+        print(f"[Simulator]   其中排队取号 {n_q} 条、取号时 free=0 的 {n_f0} 条、"
+              f"放弃 {n_ab} 人次（{n_ab / max(len(self._queue_events), 1):.1%}）")
+        return logs_path, ev_path
 
     # ---------- 问卷加权的平均洗澡时长（分钟） ----------
     def _mean_duration_min(self) -> float:
@@ -885,12 +1007,23 @@ class BathSimulator:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',
-                        choices=['history', 'realtime', 'peak', 'demo'],
+                        choices=['history', 'realtime', 'peak', 'demo', 'export'],
                         default='demo')
     parser.add_argument('--users', type=int, default=300,
                         help='每天到访人数（一栋女生楼规模，默认 300）')
     parser.add_argument('--days', type=int, default=90,
                         help='历史仿真天数（默认 90）')
+    parser.add_argument('--scenario', choices=['base', 'peak', 'test'], default='base',
+                        help='base=日常到达；peak=75%% 到访集中在 21-23 点的压力场景；'
+                             'test=独立测试场景（不参与训练）')
+    parser.add_argument('--peak-share', type=float, default=None,
+                        help='覆盖集中高峰到访占比（0~1，默认 peak=0.75，其余=0）')
+    parser.add_argument('--seed', type=int, default=20261124,
+                        help='随机种子（默认 20261124；测试场景建议用不同种子）')
+    parser.add_argument('--export-dir', default=None,
+                        help='export 模式下 CSV 输出目录（默认项目根目录）')
+    parser.add_argument('--prefix', default=None,
+                        help='export 模式下输出文件前缀（默认 sim_<scenario>）')
     args = parser.parse_args()
 
     cfg = load_config()
@@ -920,6 +1053,17 @@ if __name__ == '__main__':
                   f"-> {state}/{conf}/{note}")
         raise SystemExit(0)
 
+    if args.mode == 'export':
+        # 纯内存仿真 + CSV 导出，无需 PostgreSQL / Redis
+        out_dir = args.export_dir or os.path.dirname(os.path.abspath(__file__))
+        sim = BathSimulator(cfg)
+        sim.simulate(user_count=args.users, days=args.days,
+                     scenario=args.scenario, seed=args.seed,
+                     peak_share=args.peak_share)
+        sim._assign_faults()
+        sim.export_csv(out_dir, prefix=args.prefix)
+        raise SystemExit(0)
+
     import psycopg2
     import redis
     pg = psycopg2.connect(**DB_CONFIG)
@@ -927,7 +1071,8 @@ if __name__ == '__main__':
     sim = BathSimulator(cfg, pg, r)
 
     if args.mode == 'history':
-        sim.generate_history(user_count=args.users, days=args.days)
+        sim.generate_history(user_count=args.users, days=args.days,
+                             scenario=args.scenario)
     elif args.mode == 'realtime':
         while True:
             sim.tick()
